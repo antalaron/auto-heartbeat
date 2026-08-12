@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Auto Heartbeat – Settings</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="../shared/theme.css" />
+  <link rel="stylesheet" href="options.css" />
+</head>
+<body>
+  <header class="app-header">
+    <div class="app-header__brand">
+      <img src="../../icons/icon-32.png" alt="" width="28" height="28" />
+      <div>
+        <h1>Auto Heartbeat</h1>
+        <p class="app-header__subtitle">Keep authenticated sessions alive automatically</p>
+      </div>
+    </div>
+  </header>
+
+  <nav class="tabs" role="tablist" aria-label="Sections">
+    <button class="tabs__button" data-tab="rules" role="tab" aria-selected="true" type="button">Rules</button>
+    <button class="tabs__button" data-tab="logs" role="tab" aria-selected="false" type="button">Activity Log</button>
+  </nav>
+
+  <main>
+    <section id="rules-panel" class="panel" role="tabpanel">
+      <div class="panel__toolbar">
+        <p id="rules-summary" class="summary-text"></p>
+        <button id="add-rule-button" class="button button--primary" type="button">+ Add rule</button>
+      </div>
+      <div id="rules-list" class="rules-list"></div>
+      <p id="rules-empty-state" class="empty-state" hidden>
+        No heartbeat rules configured yet. Click “Add rule” to create one.
+      </p>
+    </section>
+
+    <section id="logs-panel" class="panel" hidden role="tabpanel">
+      <div class="panel__toolbar">
+        <p class="summary-text">Most recent activity (up to 500 entries retained)</p>
+      </div>
+      <div id="logs-list" class="logs-list"></div>
+      <p id="logs-empty-state" class="empty-state" hidden>No activity recorded yet.</p>
+    </section>
+  </main>
+
+  <dialog id="rule-dialog" class="rule-dialog">
+    <form id="rule-form" method="dialog">
+      <h2 id="rule-dialog-title">Add heartbeat rule</h2>
+
+      <div class="form-row">
+        <label for="field-name">Name <span class="field-hint">(optional)</span></label>
+        <input id="field-name" name="name" type="text" maxlength="80" placeholder="e.g. Work Portal" />
+      </div>
+
+      <div class="form-row form-row--checkbox">
+        <label for="field-enabled">
+          <input id="field-enabled" name="enabled" type="checkbox" checked />
+          Enabled
+        </label>
+      </div>
+
+      <div class="form-row">
+        <label for="field-domain">Domain <span class="required">*</span></label>
+        <input
+          id="field-domain"
+          name="domain"
+          type="text"
+          required
+          placeholder="portal.example.com or *.example.com"
+        />
+        <p class="field-error" id="error-domain"></p>
+      </div>
+
+      <div class="form-row form-row--split">
+        <div>
+          <label for="field-method">Method</label>
+          <select id="field-method" name="method">
+            <option value="GET">GET</option>
+            <option value="POST">POST</option>
+          </select>
+        </div>
+        <div>
+          <label for="field-interval">Interval (minutes) <span class="required">*</span></label>
+          <input id="field-interval" name="interval" type="number" min="1" max="1440" required />
+          <p class="field-error" id="error-interval"></p>
+        </div>
+      </div>
+
+      <div class="form-row">
+        <label for="field-url">Request URL <span class="required">*</span></label>
+        <input id="field-url" name="url" type="text" required placeholder="https://portal.example.com/api/me" />
+        <p class="field-error" id="error-url"></p>
+      </div>
+
+      <div class="form-row">
+        <label for="field-headers">Headers <span class="field-hint">(JSON object, optional)</span></label>
+        <textarea id="field-headers" name="headers" rows="4" placeholder='{"X-CSRF-Token": "..."}'></textarea>
+        <p class="field-error" id="error-headers"></p>
+      </div>
+
+      <div class="form-row">
+        <label for="field-body">Request body <span class="field-hint">(optional, POST only)</span></label>
+        <textarea id="field-body" name="body" rows="3"></textarea>
+      </div>
+
+      <p class="field-error" id="error-general"></p>
+
+      <div class="dialog-actions">
+        <button type="button" id="rule-cancel-button" class="button button--ghost">Cancel</button>
+        <button type="submit" id="rule-save-button" class="button button--primary">Save rule</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script type="module" src="options.js"></script>
+</body>
+</html>

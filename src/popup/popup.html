@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Auto Heartbeat</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="../shared/theme.css" />
+  <link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+  <div class="popup">
+    <header class="popup__header">
+      <img src="../../icons/icon-32.png" alt="" width="24" height="24" />
+      <h1>Auto Heartbeat</h1>
+    </header>
+
+    <section class="popup__stats">
+      <div class="stat">
+        <span class="stat__value" id="stat-total">0</span>
+        <span class="stat__label">Rules</span>
+      </div>
+      <div class="stat">
+        <span class="stat__value" id="stat-enabled">0</span>
+        <span class="stat__label">Enabled</span>
+      </div>
+      <div class="stat">
+        <span class="stat__value" id="stat-active">0</span>
+        <span class="stat__label">Active now</span>
+      </div>
+    </section>
+
+    <section class="popup__section">
+      <h2>Active heartbeats</h2>
+      <ul id="active-list" class="active-list"></ul>
+      <p id="active-empty" class="empty-state" hidden>No matching tabs are currently open.</p>
+    </section>
+
+    <section class="popup__section">
+      <h2>Recent activity</h2>
+      <ul id="recent-logs" class="recent-logs"></ul>
+      <p id="logs-empty" class="empty-state" hidden>No activity recorded yet.</p>
+    </section>
+
+    <footer class="popup__footer">
+      <button id="open-options-button" class="button button--primary" type="button">Open Settings</button>
+    </footer>
+  </div>
+
+  <script type="module" src="popup.js"></script>
+</body>
+</html>
