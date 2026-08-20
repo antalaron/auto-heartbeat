@@ -4,8 +4,8 @@ A Firefox browser extension that automatically keeps selected web sessions alive
 periodic, configurable HTTP "heartbeat" requests — but **only** while a matching browser tab is
 actually open. If no matching tab exists, the extension does nothing at all.
 
-Built for personal use with production-quality engineering: Manifest V3, ES modules, no
-frameworks, no telemetry, and full support for Firefox Multi-Account Containers.
+Built with production-quality engineering: Manifest V3, ES modules, no frameworks, no
+telemetry, and full support for Firefox Multi-Account Containers.
 
 ## Overview
 
@@ -212,15 +212,40 @@ No permission is requested that isn't directly used by a feature described above
 - `host_permissions` are broad (`<all_urls>`) by necessity, since heartbeat targets are entirely
   user-defined; review your configured rules periodically if you have security concerns.
 
+## Installation
+
+Auto Heartbeat is distributed as a signed, unlisted (self-distributed) Firefox extension
+through Mozilla's addons.mozilla.org (AMO) signing service, rather than as a public AMO
+listing. Signed `.xpi` releases are published from this repository.
+
+To install a release build:
+
+1. Download the signed `.xpi` for the version you want from the project's
+   [GitHub Releases](https://github.com/antalaron/auto-heartbeat/releases) page.
+2. In Firefox, open `about:addons`, click the gear icon, and choose **Install Add-on From
+   File...**, then select the downloaded `.xpi`. Alternatively, open the `.xpi` link directly in a
+   tab and Firefox will prompt to install it.
+3. Approve the permission prompt.
+
+See [RELEASE.md](RELEASE.md) for how releases are built, signed and published, and how automatic
+updates work for this extension.
+
 ## Development
 
-This extension is not published on addons.mozilla.org and is meant for personal use. To load it
-temporarily in Firefox:
+The steps below are for running the extension **from source**, for development and debugging —
+this is not how the extension is meant to be installed normally (see [Installation](#installation)
+above). To load it temporarily in Firefox:
 
 1. Open `about:debugging`.
 2. Choose **This Firefox**.
 3. Click **Load Temporary Add-on**.
 4. Select `manifest.json` from this project's root folder.
+
+Temporary add-ons loaded this way are unsigned, are removed when Firefox restarts, and are only
+intended for local testing — they are not a substitute for installing a released version.
+
+Alternatively, [`web-ext`](https://extensionworkshop.com/documentation/develop/getting-started-with-web-ext/)
+can load and auto-reload the extension for you: `npx web-ext run --source-dir=.`
 
 ### Reloading after changes
 
@@ -250,3 +275,12 @@ click **Reload** next to Auto Heartbeat.
 - Rule grouping/tagging for users with many configured domains.
 - Chromium/Chrome-compatible build (the codebase already avoids Firefox-only APIs wherever
   possible, aside from `contextualIdentities`, which has no Chromium equivalent).
+
+## Releasing
+
+See [RELEASE.md](RELEASE.md) for how signed releases are built, submitted to Mozilla as an
+unlisted/self-distributed add-on, published, and updated.
+
+## License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
