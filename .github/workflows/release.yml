@@ -1,0 +1,141 @@
+name: Release
+
+# Triggered by pushing a version tag, e.g.:
+#   git tag v1.2.3
+#   git push origin v1.2.3
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+# Minimum permissions needed: create a GitHub Release and push the updated update manifest to
+# the default branch. No other scopes (issues, packages, actions, ...) are required.
+permissions:
+  contents: write
+
+# Avoid two release runs for the same tag stepping on each other (e.g. a re-triggered run).
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout tag
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Determine and validate version from tag
+        id: version
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Tag '$TAG' does not match the required vX.Y.Z format."
+            exit 1
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Validate manifest.json matches the tag
+        run: node scripts/validate-release.mjs --tag "${{ steps.version.outputs.tag }}"
+
+      - name: Read extension id from manifest.json
+        id: manifest
+        run: |
+          EXTENSION_ID="$(node -e "console.log(require('./manifest.json').browser_specific_settings.gecko.id)")"
+          echo "extension_id=$EXTENSION_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Lint extension source
+        run: npx --yes web-ext lint --source-dir=. --self-hosted --ignore-files "package.json" "scripts/**" "updates.json"
+
+      - name: Build extension package
+        run: npx --yes web-ext build --source-dir=. --overwrite-dest --ignore-files "package.json" "scripts/**" "updates.json"
+
+      # web-ext sign submits the built package to Mozilla's AMO signing API (channel=unlisted,
+      # i.e. self-distributed), waits for the automated review/signing to complete, and downloads
+      # the signed .xpi into --artifacts-dir. A non-zero exit here (rejection, timeout, auth
+      # failure, ...) fails the job, so an unsigned package is never published.
+      - name: Submit to Mozilla for signing
+        env:
+          WEB_EXT_API_KEY: ${{ secrets.WEB_EXT_API_KEY }}
+          WEB_EXT_API_SECRET: ${{ secrets.WEB_EXT_API_SECRET }}
+        run: |
+          rm -f ./web-ext-artifacts/*.xpi
+          npx --yes web-ext sign \
+            --source-dir=. \
+            --channel=unlisted \
+            --artifacts-dir=./web-ext-artifacts \
+            --ignore-files "package.json" "scripts/**" "updates.json"
+
+      # Confirms Mozilla actually returned a signed package matching this exact version/id, then
+      # renames the untouched signed bytes to the human-readable release filename.
+      - name: Verify and rename signed XPI
+        id: signed
+        run: |
+          chmod +x scripts/verify-signed-xpi.sh
+          scripts/verify-signed-xpi.sh \
+            "${{ steps.version.outputs.version }}" \
+            "./web-ext-artifacts" \
+            "${{ steps.manifest.outputs.extension_id }}"
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${{ steps.version.outputs.tag }}"
+          ASSET="${{ steps.signed.outputs.path }}"
+          if gh release view "$TAG" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            echo "Release $TAG already exists; (re-)uploading the signed asset."
+            gh release upload "$TAG" "$ASSET" --repo "${{ github.repository }}" --clobber
+          else
+            gh release create "$TAG" "$ASSET" \
+              --repo "${{ github.repository }}" \
+              --title "Auto Heartbeat $TAG" \
+              --generate-notes
+          fi
+
+      # Firefox's automatic update mechanism polls manifest.json's update_url (a stable
+      # raw.githubusercontent.com URL) for this JSON file. It must only be updated once the
+      # release asset it points to already exists, and old version history must be preserved.
+      - name: Update Firefox update manifest
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git fetch origin "${{ github.event.repository.default_branch }}"
+          git checkout "${{ github.event.repository.default_branch }}"
+
+          UPDATE_LINK="https://github.com/${{ github.repository }}/releases/download/${{ steps.version.outputs.tag }}/${{ steps.signed.outputs.filename }}"
+
+          node scripts/generate-update-manifest.mjs \
+            --version "${{ steps.version.outputs.version }}" \
+            --update-link "$UPDATE_LINK" \
+            --update-hash "sha256:${{ steps.signed.outputs.sha256 }}"
+
+          node -e "
+            const { version } = require('./manifest.json');
+            const updates = require('./updates.json');
+            const id = '${{ steps.manifest.outputs.extension_id }}';
+            const addon = updates.addons && updates.addons[id];
+            if (!addon) throw new Error('updates.json is missing an entry for ' + id);
+            const entry = addon.updates.find((u) => u.version === version);
+            if (!entry) throw new Error('updates.json is missing an entry for version ' + version);
+            if (!entry.update_link.endsWith('${{ steps.signed.outputs.filename }}')) {
+              throw new Error('updates.json update_link does not reference the signed XPI');
+            }
+            console.log('updates.json OK: ' + entry.update_link);
+          "
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add updates.json
+          if git diff --cached --quiet; then
+            echo "updates.json already up to date; nothing to commit."
+          else
+            git commit -m "chore: publish update manifest for ${{ steps.version.outputs.tag }}"
+            git push origin "HEAD:${{ github.event.repository.default_branch }}"
+          fi

@@ -1,0 +1,12 @@
+{
+  "name": "auto-heartbeat-release-tooling",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Local scripts for validating and packaging the Auto Heartbeat Firefox extension release. Not published; the extension's real version lives in manifest.json.",
+  "license": "MIT",
+  "scripts": {
+    "validate": "node scripts/validate-release.mjs",
+    "lint": "npx --yes web-ext lint --source-dir=. --self-hosted --ignore-files \"package.json\" \"scripts/**\" \"updates.json\"",
+    "build": "npx --yes web-ext build --source-dir=. --overwrite-dest --ignore-files \"package.json\" \"scripts/**\" \"updates.json\""
+  }
+}
