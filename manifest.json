@@ -4,6 +4,10 @@
   "version": "1.0.2",
   "description": "Keeps selected web sessions alive by sending periodic, configurable heartbeat requests only while a matching browser tab is open. Fully container-aware.",
   "author": "Antal Áron",
+  "developer": {
+    "name": "Antal Áron",
+    "url": "https://antalaron.hu"
+  },
   "homepage_url": "https://github.com/antalaron/auto-heartbeat",
   "icons": {
     "16": "icons/icon-16.png",
