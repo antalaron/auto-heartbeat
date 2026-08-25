@@ -37,7 +37,13 @@ export const MIN_INTERVAL_MINUTES = 1;
 /** Largest interval (minutes) a user may configure. */
 export const MAX_INTERVAL_MINUTES = 1440;
 
-/** Cookie store ID Firefox uses for ordinary (non-container) tabs. */
+/**
+ * Cookie store ID Firefox uses for ordinary (non-container) tabs. Chrome tabs
+ * never set `cookieStoreId` at all, so {@link tabScanner} falls back to this
+ * same constant for every Chrome tab — which is exactly what makes multiple
+ * matching Chrome tabs collapse into a single session per rule (Chrome has
+ * no Firefox-style container/cookie-store concept to distinguish them by).
+ */
 export const DEFAULT_COOKIE_STORE_ID = 'firefox-default';
 
 /** Cookie store ID Firefox uses for private browsing tabs. */

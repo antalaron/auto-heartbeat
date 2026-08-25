@@ -1,13 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Auto Heartbeat",
-  "version": "1.0.2",
-  "description": "Keeps selected web sessions alive by sending periodic, configurable heartbeat requests only while a matching browser tab is open. Fully container-aware.",
+  "description": "Keeps selected web sessions alive by sending periodic, configurable heartbeat requests only while a matching browser tab is open.",
   "author": "Antal Áron",
-  "developer": {
-    "name": "Antal Áron",
-    "url": "https://antalaron.hu"
-  },
   "homepage_url": "https://github.com/antalaron/auto-heartbeat",
   "icons": {
     "16": "icons/icon-16.png",
@@ -18,7 +13,7 @@
     "128": "icons/icon-128.png"
   },
   "background": {
-    "scripts": ["src/background/background.js"],
+    "service_worker": "src/background/background.js",
     "type": "module"
   },
   "action": {
@@ -34,28 +29,8 @@
     "page": "src/options/options.html",
     "open_in_tab": true
   },
-  "permissions": [
-    "storage",
-    "alarms",
-    "tabs",
-    "cookies",
-    "contextualIdentities",
-    "scripting"
-  ],
+  "permissions": ["storage", "alarms", "tabs", "scripting"],
   "host_permissions": ["<all_urls>"],
-  "browser_specific_settings": {
-    "gecko": {
-      "id": "auto-heartbeat@antalaron.hu",
-      "strict_min_version": "140.0",
-      "update_url": "https://raw.githubusercontent.com/antalaron/auto-heartbeat/master/updates.json",
-      "data_collection_permissions": {
-        "required": ["none"]
-      }
-    },
-    "gecko_android": {
-      "strict_min_version": "142.0"
-    }
-  },
   "content_security_policy": {
     "extension_pages": "default-src 'self'; script-src 'self'; object-src 'self'; style-src 'self'"
   }

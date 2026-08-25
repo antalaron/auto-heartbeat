@@ -50,6 +50,36 @@ if (typeof geckoId !== 'string' || geckoId.length === 0) {
 
 console.log(`manifest.json OK: id="${geckoId}", version="${version}"`);
 
+const chromeManifestPath = path.join(rootDir, 'manifest.chrome.json');
+if (!existsSync(chromeManifestPath)) {
+  fail(`manifest.chrome.json not found at ${chromeManifestPath}`);
+}
+
+let chromeManifest;
+try {
+  chromeManifest = JSON.parse(readFileSync(chromeManifestPath, 'utf8'));
+} catch (error) {
+  fail(`manifest.chrome.json is not valid JSON: ${error.message}`);
+}
+
+if (chromeManifest.manifest_version !== 3) {
+  fail('manifest.chrome.json must declare "manifest_version": 3.');
+}
+if (chromeManifest.background?.scripts) {
+  fail('manifest.chrome.json must not declare "background.scripts" (Manifest V2 only).');
+}
+if (chromeManifest.background?.persistent) {
+  fail('manifest.chrome.json must not declare "background.persistent" (Manifest V2 only).');
+}
+if (!chromeManifest.background?.service_worker) {
+  fail('manifest.chrome.json must declare "background.service_worker".');
+}
+if ('version' in chromeManifest) {
+  fail('manifest.chrome.json must not hard-code "version" - it is injected from manifest.json at build time.');
+}
+
+console.log('manifest.chrome.json OK: Manifest V3 service worker background, no hard-coded version.');
+
 const { tag } = parseArgs(process.argv.slice(2));
 if (tag) {
   const tagMatch = /^v(\d+\.\d+\.\d+)$/.exec(tag);

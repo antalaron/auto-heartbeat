@@ -1,3 +1,4 @@
+import '../shared/browserPolyfill.js';
 import * as configService from '../services/configService.js';
 import { requestSchedulerRun } from '../shared/messaging.js';
 import { initRuleDialog, openAddDialog, openEditDialog } from './ruleDialog.js';

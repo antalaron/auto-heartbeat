@@ -1,11 +1,46 @@
 # Auto Heartbeat
 
-A Firefox browser extension that automatically keeps selected web sessions alive by sending
-periodic, configurable HTTP "heartbeat" requests — but **only** while a matching browser tab is
-actually open. If no matching tab exists, the extension does nothing at all.
+A **Firefox and Chrome** browser extension that automatically keeps selected web sessions alive
+by sending periodic, configurable HTTP "heartbeat" requests — but **only** while a matching
+browser tab is actually open. If no matching tab exists, the extension does nothing at all.
 
 Built with production-quality engineering: Manifest V3, ES modules, no frameworks, no
-telemetry, and full support for Firefox Multi-Account Containers.
+telemetry, full support for Firefox Multi-Account Containers, and a Chrome Manifest V3 service
+worker build that shares nearly all of its logic with the Firefox build.
+
+## Supported Browsers
+
+| Browser | Manifest | Background | Container/session model |
+|---------|----------|-------------|--------------------------|
+| Firefox | Manifest V3 (event-page style `background.scripts`) | Long-lived event page, restarted automatically by `browser.alarms` | Firefox Multi-Account Containers: each container is an independent `cookieStoreId` and gets its own heartbeat. |
+| Chrome  | Manifest V3 (`background.service_worker`) | Ephemeral service worker, woken up by `chrome.alarms` | No container concept. All tabs in a Chrome profile share one cookie context, so matching tabs are deduplicated into a single heartbeat per rule. |
+
+Both builds share essentially the same source code under [`src/`](src/) — see
+[Architecture](#architecture) below for exactly what's shared versus browser-specific.
+
+### Firefox: Multi-Account Containers
+
+See [Firefox Containers](#firefox-containers) below — this behavior is unchanged from prior
+versions.
+
+### Chrome: single shared session per profile
+
+Chrome has no equivalent to Firefox's `cookieStoreId`/Multi-Account Containers. Within one Chrome
+profile, every tab shares the same cookie jar, so:
+
+```text
+Chrome
+├── Tab 1 → portal.example.com
+├── Tab 2 → portal.example.com
+└── Tab 3 → portal.example.com
+```
+
+is one authenticated session, not three. Auto Heartbeat's scheduler already groups matching tabs
+by `(rule, cookieStoreId)` (see [Scheduling](#scheduling)); since Chrome tabs never report a
+`cookieStoreId`, every matching Chrome tab for a given rule falls into the same group automatically
+— so exactly **one** heartbeat is sent per rule, no matter how many matching tabs are open, and it
+stops the moment the last matching tab closes. Auto Heartbeat does **not** attempt to fake or
+emulate Firefox container names/behavior on Chrome.
 
 ## Overview
 
@@ -63,10 +98,13 @@ the same time, with zero cross-contamination between containers.
 
 ```text
 /
-├── manifest.json         Manifest V3 definition (Firefox)
+├── manifest.json          Manifest V3 definition (Firefox) - source of truth for the version
+├── manifest.chrome.json   Manifest V3 template (Chrome) - version injected at build time
 ├── README.md
 ├── LICENSE
 ├── icons/                 Toolbar/app icons (SVG source + generated PNGs)
+│
+├── dist/chrome/           Generated, unpacked Chrome build (git-ignored; `npm run build:chrome`)
 │
 └── src/
     ├── background/        Service worker / event page: scheduler and its collaborators
@@ -74,7 +112,7 @@ the same time, with zero cross-contamination between containers.
     │   ├── scheduler.js        Orchestrates a single scheduler tick
     │   ├── tabScanner.js       Enumerates open tabs into minimal, matchable info
     │   ├── sessionResolver.js  Groups matching tabs into (rule, container) sessions
-    │   ├── containerService.js Resolves human-readable container names
+    │   ├── containerService.js Resolves human-readable Firefox container names (no-op on Chrome)
     │   └── heartbeatExecutor.js Runs the fetch() inside the matching tab's context
     │
     ├── popup/              Toolbar popup (stats, active countdowns, recent activity)
@@ -84,13 +122,55 @@ the same time, with zero cross-contamination between containers.
     ├── models/              Plain data factories for configs and log entries
     ├── services/            Business logic shared across UI and background contexts
     ├── utils/               Small, dependency-free helpers (validation, formatting, IDs)
-    └── shared/              Constants, cross-context messaging, and the shared theme
+    └── shared/
+        ├── browserPolyfill.js  Aliases `browser` to `chrome` when only `chrome` exists
+        ├── constants.js        Shared constants (storage keys, alarm name, etc.)
+        ├── messaging.js        Cross-context messaging helper
+        └── theme.css           Shared popup/options styling
 ```
 
 Each layer has a single responsibility: **models** define shape, **storage** persists it,
 **services** implement CRUD/business rules on top of storage, and **background** wires everything
 together into the actual scheduling behavior. The popup and options pages import the same
 services directly — there is no duplicated business logic between UI surfaces.
+
+### How the same code runs on both browsers
+
+The entire `src/` tree — scheduler, storage, services, popup, options — is shared verbatim between
+Firefox and Chrome. Only two things differ per browser:
+
+1. **The manifest.** `manifest.json` (Firefox) declares `background.scripts` (an event page);
+   `manifest.chrome.json` (Chrome) declares `background.service_worker` (a Manifest V3 service
+   worker). Nothing else in the manifests meaningfully diverges — see
+   [Manifest differences](#manifest-differences) below.
+2. **The `browser` global.** Firefox injects a promise-based `browser` global automatically;
+   Chrome only injects `chrome`. [`src/shared/browserPolyfill.js`](src/shared/browserPolyfill.js)
+   aliases `browser` to `chrome` when `browser` is missing, so every other module can keep calling
+   `browser.storage`, `browser.alarms`, `browser.tabs`, `browser.scripting`, etc. unchanged on
+   both browsers. It's imported first by every entry point
+   ([`background.js`](src/background/background.js), [`popup.js`](src/popup/popup.js),
+   [`options.js`](src/options/options.js)).
+
+Firefox-only APIs are isolated to a single module:
+[`containerService.js`](src/background/containerService.js) resolves
+`browser.contextualIdentities` container names and simply returns `null` when that API doesn't
+exist (i.e. on Chrome) — nothing elsewhere in the codebase needs to know which browser it's
+running on. The scheduler's session key is already browser-agnostic: it's built from
+`(configId, cookieStoreId)`, and since Chrome tabs never report a `cookieStoreId`, every Chrome tab
+falls back to the same constant, which is exactly what collapses multiple matching Chrome tabs
+into one shared session (see [Chrome: single shared session per profile](#chrome-single-shared-session-per-profile)).
+
+### Manifest differences
+
+| Field | Firefox (`manifest.json`) | Chrome (`manifest.chrome.json`) |
+|-------|---------------------------|----------------------------------|
+| `background` | `{ "scripts": [...], "type": "module" }` | `{ "service_worker": "...", "type": "module" }` |
+| `browser_specific_settings.gecko` | Extension id, `update_url`, min versions | Not applicable to Chrome; omitted |
+| `permissions` | Includes `cookies`, `contextualIdentities` | Omits both (Chrome has no container API to support) |
+| `version` | Source of truth, bumped by hand | Never hard-coded; injected from `manifest.json` at build time (`npm run build:chrome`) |
+
+Firefox and Chrome manifests are intentionally **not** byte-for-byte identical — each only
+declares what its own browser actually supports.
 
 ## Configuration
 
@@ -177,6 +257,11 @@ entries, in the toolbar popup.
 
 ## Permissions
 
+Firefox and Chrome are reviewed for **minimum required permissions independently** — Chrome does
+not receive Firefox-only permissions it has no use for.
+
+### Firefox (`manifest.json`)
+
 | Permission            | Why it's needed                                                                 |
 |-----------------------|----------------------------------------------------------------------------------|
 | `storage`              | Persist rules, activity logs and scheduler state locally.                       |
@@ -187,7 +272,20 @@ entries, in the toolbar popup.
 | `scripting`            | Inject the heartbeat `fetch()` into a matching tab so it runs in that tab's own, container-scoped cookie jar. |
 | `host_permissions: <all_urls>` | Heartbeat URLs are entirely user-defined and unknown ahead of time; this allows requests to and script injection into whatever site you configure, in any container. |
 
-No permission is requested that isn't directly used by a feature described above.
+### Chrome (`manifest.chrome.json`)
+
+| Permission            | Why it's needed                                                                 |
+|-----------------------|----------------------------------------------------------------------------------|
+| `storage`              | Persist rules, activity logs and scheduler state locally.                       |
+| `alarms`               | Drive the once-a-minute scheduler tick from the service worker, including waking it back up after Chrome terminates it. |
+| `tabs`                 | Enumerate open tabs and read their URLs to determine which rules are active.    |
+| `scripting`            | Inject the heartbeat `fetch()` into a matching tab so it runs with that tab's own cookies. |
+| `host_permissions: <all_urls>` | Heartbeat URLs are entirely user-defined and unknown ahead of time; this allows requests to and script injection into whatever site you configure. |
+
+Chrome **omits** `cookies` and `contextualIdentities`: Chrome has no Multi-Account Containers
+equivalent, so there is no container information to read and no permission requested for it.
+
+No permission is requested on either browser that isn't directly used by a feature described above.
 
 ## Privacy
 
@@ -213,6 +311,8 @@ No permission is requested that isn't directly used by a feature described above
   user-defined; review your configured rules periodically if you have security concerns.
 
 ## Installation
+
+### Firefox
 
 Auto Heartbeat is distributed as a signed, unlisted (self-distributed) Firefox extension
 through Mozilla's addons.mozilla.org (AMO) signing service, rather than as a public AMO
@@ -242,11 +342,35 @@ To install a release build:
 See [RELEASE.md](RELEASE.md) for background on Mozilla signing/self-distribution, and
 [Releases](#releases) below for how this repository automates building, signing and publishing.
 
+### Chrome
+
+Auto Heartbeat is **not currently published on the Chrome Web Store** — it is installed locally as
+an unpacked Manifest V3 extension. No Chrome Web Store account or publication is required.
+
+1. Download `auto_heartbeat-<version>-chrome.zip` from the project's
+   [GitHub Releases](https://github.com/antalaron/auto-heartbeat/releases) page and unzip it
+   somewhere permanent (Chrome loads unpacked extensions from a directory on disk, not a zip) —
+   or build it yourself, see [Development](#development) below.
+2. Open `chrome://extensions/` in Chrome.
+3. Enable **Developer mode** (top-right toggle).
+4. Click **Load unpacked**.
+5. Select the directory that directly contains `manifest.json` (e.g. the unzipped folder, or
+   `dist/chrome/` if you built it locally).
+6. Auto Heartbeat appears in the toolbar; open it or its Settings page like any other extension.
+
+This unpacked install does **not** auto-update; reinstall (steps 1–5) for a new version, or use
+**Update** in `chrome://extensions/` after replacing the directory's contents. If this project is
+published to the Chrome Web Store in the future, this section will be updated with the listing URL
+and a one-click install path; see [Chrome Web Store](#chrome-web-store) in [RELEASE.md](RELEASE.md)
+for what that would require.
+
 ## Development
 
 The steps below are for running the extension **from source**, for development and debugging —
 this is not how the extension is meant to be installed normally (see [Installation](#installation)
-above). To load it temporarily in Firefox:
+above).
+
+### Firefox
 
 1. Open `about:debugging`.
 2. Choose **This Firefox**.
@@ -259,13 +383,13 @@ intended for local testing — they are not a substitute for installing a releas
 Alternatively, [`web-ext`](https://extensionworkshop.com/documentation/develop/getting-started-with-web-ext/)
 can load and auto-reload the extension for you: `npx web-ext run --source-dir=.`
 
-### Reloading after changes
+#### Reloading after changes
 
 Temporary add-ons are unloaded when Firefox restarts, and code changes are not picked up
 automatically. After editing source files, return to `about:debugging` → **This Firefox** and
 click **Reload** next to Auto Heartbeat.
 
-### Inspecting the extension
+#### Inspecting the extension
 
 - **Background script**: on the `about:debugging` page, click **Inspect** next to Auto Heartbeat
   to open its dedicated DevTools (console, network, etc.).
@@ -277,17 +401,66 @@ click **Reload** next to Auto Heartbeat.
   `await browser.storage.local.get(null)` to inspect the full stored state (rules, logs, scheduler
   state).
 
+### Chrome
+
+Chrome cannot load `manifest.json`/`manifest.chrome.json` from the repository root directly — it
+needs an unpacked directory whose `manifest.json` already has a concrete `"version"` (Chrome's is a
+build-time template, see [Manifest differences](#manifest-differences)). Build it first:
+
+```bash
+npm run build:chrome   # writes dist/chrome/ (unpacked) and web-ext-artifacts/*-chrome.zip
+```
+
+Then:
+
+1. Open `chrome://extensions/`.
+2. Enable **Developer mode** (top-right toggle).
+3. Click **Load unpacked**.
+4. Select the generated `dist/chrome/` folder (it directly contains `manifest.json`).
+
+No Chrome Web Store account or publication is required for this — see
+[Chrome](#chrome-1) under Installation above and [RELEASE.md](RELEASE.md) for more detail.
+
+#### Reloading after changes
+
+Chrome does not watch the filesystem. After editing source files:
+
+```bash
+npm run build:chrome
+```
+
+then click the **reload icon** on Auto Heartbeat's card in `chrome://extensions/` (or use
+**Update** to reload every unpacked extension at once).
+
+#### Inspecting the extension
+
+- **Service worker**: on `chrome://extensions/`, find Auto Heartbeat and click the **service
+  worker** link (shown as "service worker" when active, or "Inspect views" once Chrome has
+  suspended it — click **service worker** to wake it and open its dedicated DevTools). This is the
+  Manifest V3 equivalent of Firefox's background page inspector.
+- **Popup**: right-click the toolbar icon while the popup is open and choose **Inspect**.
+- **Options page**: open it via the popup's "Open Settings" button, then press
+  <kbd>F12</kbd>/<kbd>Cmd+Option+I</kbd> like any regular page.
+- **Storage**: from any DevTools console above, run `await chrome.storage.local.get(null)` (or
+  `await browser.storage.local.get(null)`, thanks to the polyfill) to inspect the full stored
+  state.
+- **Alarms**: `chrome://extensions/` doesn't expose alarms directly; from the service worker's
+  console run `await chrome.alarms.getAll()` to confirm the scheduler alarm is registered.
+
 ### Local validation
 
 A minimal [`package.json`](package.json) (no dependencies; scripts only) provides the same checks
-the release workflow runs, without submitting anything to Mozilla or GitHub:
+the release workflow runs, without submitting anything to Mozilla, the Chrome Web Store, or GitHub:
 
 ```bash
-npm run validate              # checks manifest.json's version/id are well-formed
+npm run validate                  # checks manifest.json + manifest.chrome.json are well-formed
 npm run validate -- --tag v1.2.3  # also checks that tag would match manifest.json's version
-npm run lint                  # runs `web-ext lint --self-hosted`
-npm run build                 # runs `web-ext build`, producing ./web-ext-artifacts/*.zip
+npm run lint                      # runs `web-ext lint --self-hosted` against the Firefox build
+npm run build:firefox             # runs `web-ext build`, producing ./web-ext-artifacts/*.zip
+npm run build:chrome              # writes dist/chrome/ and ./web-ext-artifacts/*-chrome.zip
 ```
+
+`npm run build` is an alias for `npm run build:firefox`, kept for backwards compatibility.
 
 ## Future Improvements
 
@@ -297,34 +470,41 @@ npm run build                 # runs `web-ext build`, producing ./web-ext-artifa
 - Configurable retry policy for transient network failures.
 - Configurable scheduler precision (sub-minute) for advanced use cases.
 - Rule grouping/tagging for users with many configured domains.
-- Chromium/Chrome-compatible build (the codebase already avoids Firefox-only APIs wherever
-  possible, aside from `contextualIdentities`, which has no Chromium equivalent).
+- Chrome Web Store publication (currently Chrome is local-install/unpacked only — see
+  [RELEASE.md](RELEASE.md#chrome-web-store)).
 
 ## Releases
 
-Releases are fully automated by the [`.github/workflows/release.yml`](.github/workflows/release.yml)
-GitHub Actions workflow, triggered by pushing a version tag:
+Releases are fully automated by the [`.github/workflows/release.yaml`](.github/workflows/release.yaml)
+GitHub Actions workflow, triggered by pushing a version tag. The workflow has four jobs so a
+problem with one browser's build can never silently affect the other, or produce a half-published
+release:
 
-- The expected tag format is **`vX.Y.Z`** (e.g. `v1.2.3`); any other tag shape fails validation
-  before anything is built.
-- `manifest.json`'s `"version"` **must exactly match** the tag (`v1.2.3` requires `"version":
-  "1.2.3"`); the workflow fails fast if they disagree, so it can never publish a release under the
-  wrong version.
-- The extension is built with `web-ext build`, then submitted to Mozilla's AMO signing API via
-  `web-ext sign --channel=unlisted` (self-distributed, not a public AMO listing — see
-  [RELEASE.md](RELEASE.md) for the terminology). The job fails if Mozilla rejects the submission or
-  signing doesn't succeed; an unsigned `.xpi` is never published.
-- The signed `.xpi` returned by Mozilla is verified (valid ZIP, contains `META-INF/mozilla.rsa`,
-  and its bundled `manifest.json` has the expected version/extension id) and, without modifying its
-  bytes, renamed to the final filename:
+```text
+validate ──┬─▶ firefox ──┐
+           └─▶ chrome  ──┴─▶ release
+```
 
-  ```text
-  auto_heartbeat-X.Y.Z.xpi
-  ```
-- That file is uploaded as the asset of a GitHub Release for the tag (release notes are
-  auto-generated by GitHub).
-- Finally, the [update manifest](#firefox-automatic-updates) is regenerated and pushed so existing
-  installs can discover the new version.
+- **`validate`**: checks the tag matches `vX.Y.Z`, and that it matches `manifest.json`'s
+  `"version"` (`v1.2.3` requires `"version": "1.2.3"`) — this is the single source of truth both
+  browser builds and the Git tag must agree on. Also validates `manifest.chrome.json`'s shape (see
+  [Manifest differences](#manifest-differences)).
+- **`firefox`**: lints and builds the extension with `web-ext build`, then submits it to Mozilla's
+  AMO signing API via `web-ext sign --channel=unlisted` (self-distributed, not a public AMO listing
+  — see [RELEASE.md](RELEASE.md) for the terminology). The job fails if Mozilla rejects the
+  submission or signing doesn't succeed, so an unsigned `.xpi` is never published. The signed
+  `.xpi` is verified (valid ZIP, contains `META-INF/mozilla.rsa`, bundled `manifest.json` has the
+  expected version/extension id) and, without modifying its bytes, renamed to
+  `auto_heartbeat-X.Y.Z.xpi`.
+- **`chrome`**: builds the Chrome Manifest V3 package (`npm run build:chrome`) and produces
+  `auto_heartbeat-X.Y.Z-chrome.zip`. No Chrome Web Store submission is involved.
+- **`release`**: only runs once **both** `firefox` and `chrome` succeed. It creates (or updates) the
+  GitHub Release for the tag and attaches both `auto_heartbeat-X.Y.Z.xpi` and
+  `auto_heartbeat-X.Y.Z-chrome.zip`, then regenerates the
+  [Firefox update manifest](#firefox-automatic-updates) so existing Firefox installs can discover
+  the new version. If Chrome's build fails, the release is never created — there is no way to end
+  up with a GitHub Release missing the Chrome asset (or vice versa, missing the signed Firefox
+  asset).
 
 ### Mozilla Signing Credentials
 
@@ -350,10 +530,10 @@ written to any committed file.
    git tag v1.2.3
    git push origin v1.2.3
    ```
-3. The release workflow runs automatically: it validates the tag/version, lints and builds the
-   extension, submits it to Mozilla for signing, publishes the signed `.xpi` as a GitHub Release
-   asset, and updates the Firefox update manifest. Watch its progress under the repository's
-   **Actions** tab.
+3. The release workflow runs automatically: it validates the tag/version, builds and signs
+   Firefox, builds Chrome, and — only if both succeed — publishes a GitHub Release with both
+   `auto_heartbeat-X.Y.Z.xpi` and `auto_heartbeat-X.Y.Z-chrome.zip` attached, and updates the
+   Firefox update manifest. Watch its progress under the repository's **Actions** tab.
 
 ### Firefox Automatic Updates
 
