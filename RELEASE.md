@@ -9,13 +9,13 @@ This document describes how **Auto Heartbeat** is released for both browsers it 
   [Chrome Web Store](#chrome-web-store) below.
 
 **The release process is fully automated** by
-[`.github/workflows/release.yaml`](.github/workflows/release.yaml) — see the README's
-[Releases](README.md#releases) section for how to trigger it and what it does, and
+[`.github/workflows/release.yaml`](.github/workflows/release.yaml) — see
+[DEVELOPMENT.md](DEVELOPMENT.md#releases) for how to trigger it and what it does, and
 [GitHub Actions](#github-actions) below for the job structure. This document covers the
 terminology, prerequisites, and Mozilla-side concepts the workflow implements, for whoever
 maintains this repository and needs to understand or change that pipeline, possibly months after
-it was last touched. It intentionally does **not** cover local development/debugging — see the
-[Development](README.md#development) section of the README for that.
+it was last touched. It intentionally does **not** cover local development/debugging — see
+[DEVELOPMENT.md](DEVELOPMENT.md#development) for that.
 
 ## Terminology
 
@@ -50,7 +50,7 @@ signature enforcement disabled, which is not a real distribution mechanism for e
 - An **AMO API key/secret** pair, generated at
   [addons.mozilla.org/developers/addon/api/key/](https://addons.mozilla.org/developers/addon/api/key/),
   stored as the `WEB_EXT_API_KEY` / `WEB_EXT_API_SECRET` GitHub Actions repository secrets (see
-  README's [Mozilla Signing Credentials](README.md#mozilla-signing-credentials)). Treat these like
+  this document's [GitHub Actions Secrets](#github-actions-secrets) section). Treat these like
   a password: never commit them or print them in workflow logs.
 - Read the [Add-on Policies](https://extensionworkshop.com/documentation/publish/add-on-policies/)
   and the
@@ -58,7 +58,7 @@ signature enforcement disabled, which is not a real distribution mechanism for e
   — both apply to unlisted extensions too.
 
 Both the [release workflow](.github/workflows/release.yaml) and the local `npm run lint`/`npm run
-build` scripts (see README's [Local validation](README.md#local-validation)) use
+build` scripts (see [DEVELOPMENT.md § Local validation](DEVELOPMENT.md#local-validation)) use
 [`web-ext`](https://extensionworkshop.com/documentation/develop/getting-started-with-web-ext/),
 Mozilla's own recommended CLI for linting, packaging and signing WebExtensions, invoked with `npx`
 (no need to add it as a project dependency). [`package.json`](package.json) in this repository only
@@ -93,7 +93,7 @@ workflow fails the job if any appear, since AMO's validator would reject the sub
 
 Before tagging, bump `"version"` in [manifest.json](manifest.json) and commit it to `master` — see
 [Versioning](#versioning) below. The workflow validates that the tag and this version match
-(see [Version Source of Truth](README.md#releases) in the README) before building anything.
+(see [DEVELOPMENT.md § Releases](DEVELOPMENT.md#releases)) before building anything.
 
 ## 2. Build the release package (automated)
 
@@ -131,8 +131,8 @@ unsigned package is never published (see [How Mozilla's review/signing works](#4
 below).
 
 `$WEB_EXT_API_KEY` / `$WEB_EXT_API_SECRET` come from the `WEB_EXT_API_KEY` / `WEB_EXT_API_SECRET`
-GitHub Actions secrets (see the README's
-[Mozilla Signing Credentials](README.md#mozilla-signing-credentials)) — the workflow never echoes
+GitHub Actions secrets (see this document's
+[GitHub Actions Secrets](#github-actions-secrets) section) — the workflow never echoes
 them.
 
 ## 4. How Mozilla's review/signing works
@@ -208,7 +208,7 @@ Firefox updates a self-distributed add-on in one of two ways
 
 (Using `raw.githubusercontent.com` against a file checked into this repo is a convenient
 "own server" for a GitHub-hosted project and needs no extra infrastructure or authentication;
-see [Firefox Automatic Updates](README.md#firefox-automatic-updates) in the README.)
+see [DEVELOPMENT.md § Firefox Automatic Updates](DEVELOPMENT.md#firefox-automatic-updates).)
 
 **Important:** once a signed version with a given `update_url` is installed by users, that URL is
 what their existing installs will keep polling. Don't move/rename the update manifest without a
@@ -253,7 +253,8 @@ extension ID — for this project, `auto-heartbeat@antalaron.hu`:
 
 ## 10. Releasing a new version (automated)
 
-See the README's [Creating a Release](README.md#creating-a-release) section. In short:
+See the README's [Creating a Release](DEVELOPMENT.md#creating-a-release) section (in
+[DEVELOPMENT.md](DEVELOPMENT.md)). In short:
 
 1. Bump `"version"` in [manifest.json](manifest.json) (see [Versioning](#versioning)) and commit
    it to `master`.
@@ -282,8 +283,8 @@ Store; there is no separate manual publishing step to run.
    Manifest-V2-only `background.scripts`/`background.persistent` fields.
 2. **Manifest V3**: `manifest.chrome.json` declares `"background": { "service_worker": "...",
    "type": "module" }` — a Chrome Manifest V3 service worker — instead of Firefox's
-   `background.scripts` event page. See [Manifest differences](README.md#manifest-differences) in
-   the README for the full field-by-field comparison, including why Chrome's permission list is
+   `background.scripts` event page. See [Manifest differences](DEVELOPMENT.md#manifest-differences) in
+   DEVELOPMENT.md for the full field-by-field comparison, including why Chrome's permission list is
    deliberately smaller (no `cookies`/`contextualIdentities`, since Chrome has no Multi-Account
    Containers equivalent).
 3. **Packaging**: the same script then zips `dist/chrome/` into
@@ -479,7 +480,7 @@ Once the release workflow finishes, before telling users about a new release:
    - It loads without a manifest error.
    - The unzipped `manifest.json`'s `"version"` matches the release.
    - The extension's popup and Settings page open, and the service worker is inspectable (see the
-     README's [Chrome debugging](README.md#chrome) instructions).
+     the README's [Chrome debugging](DEVELOPMENT.md#chrome) instructions).
 4. Confirm the `chrome` job's "Publish to Chrome Web Store" step succeeded, and check the
    [Chrome Web Store developer dashboard](https://chrome.google.com/webstore/devconsole/) shows
    the new version as either live or `ITEM_PENDING_REVIEW` for the extension id in
