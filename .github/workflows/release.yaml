@@ -114,8 +114,10 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-  # Builds the Chrome Manifest V3 package (unpacked dir + release zip). No Chrome Web Store
-  # submission is involved; this is purely a local build + packaging step.
+  # Builds the Chrome Manifest V3 package (unpacked dir + release zip), then uploads and publishes
+  # it to the Chrome Web Store via the official chromewebstore/v1.1 API. A failed upload/publish
+  # fails this job, which in turn blocks the `release` job below - so the GitHub Release can never
+  # be created if the Chrome Web Store publish step didn't actually succeed.
   chrome:
     needs: validate
     runs-on: ubuntu-latest
@@ -133,6 +135,19 @@ jobs:
       - name: Build Chrome extension package
         run: npm run build:chrome
 
+      # Exchanges the long-lived refresh token for a short-lived access token, uploads the zip as
+      # a new package version, then publishes it - the same OAuth/API flow Google documents for
+      # unattended CI publishing. The access token and API responses are never echoed to the log.
+      - name: Publish to Chrome Web Store
+        env:
+          CHROME_EXTENSION_ID: ${{ secrets.CHROME_EXTENSION_ID }}
+          CHROME_CLIENT_ID: ${{ secrets.CHROME_CLIENT_ID }}
+          CHROME_CLIENT_SECRET: ${{ secrets.CHROME_CLIENT_SECRET }}
+          CHROME_REFRESH_TOKEN: ${{ secrets.CHROME_REFRESH_TOKEN }}
+        run: |
+          chmod +x scripts/publish-chrome-webstore.sh
+          scripts/publish-chrome-webstore.sh "web-ext-artifacts/auto_heartbeat-${{ needs.validate.outputs.version }}-chrome.zip"
+
       - name: Upload Chrome zip as workflow artifact
         uses: actions/upload-artifact@v4
         with:
@@ -141,9 +156,11 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
-  # Only runs once both browser builds have succeeded, so a broken Chrome build can never produce
-  # a GitHub Release missing that asset, and a broken/rejected Firefox signature can never produce
-  # a misleadingly "successful" release either.
+  # Only runs once both browser jobs have succeeded - meaning Firefox is signed by Mozilla *and*
+  # the Chrome package has been built and published to the Chrome Web Store. A broken/rejected
+  # Chrome Web Store publish can therefore never produce a GitHub Release missing (or silently
+  # omitting) the Chrome asset, and a broken/rejected Firefox signature can never produce a
+  # misleadingly "successful" release either.
   release:
     needs: [validate, firefox, chrome]
     runs-on: ubuntu-latest

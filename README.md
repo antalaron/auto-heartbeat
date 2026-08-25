@@ -344,25 +344,31 @@ See [RELEASE.md](RELEASE.md) for background on Mozilla signing/self-distribution
 
 ### Chrome
 
-Auto Heartbeat is **not currently published on the Chrome Web Store** — it is installed locally as
-an unpacked Manifest V3 extension. No Chrome Web Store account or publication is required.
+Every tagged release is automatically built, uploaded and published to the **Chrome Web Store**
+by the release workflow (see [Releases](#releases) and [RELEASE.md](RELEASE.md)). There are two
+ways to install Auto Heartbeat on Chrome:
 
-1. Download `auto_heartbeat-<version>-chrome.zip` from the project's
-   [GitHub Releases](https://github.com/antalaron/auto-heartbeat/releases) page and unzip it
-   somewhere permanent (Chrome loads unpacked extensions from a directory on disk, not a zip) —
-   or build it yourself, see [Development](#development) below.
-2. Open `chrome://extensions/` in Chrome.
-3. Enable **Developer mode** (top-right toggle).
-4. Click **Load unpacked**.
-5. Select the directory that directly contains `manifest.json` (e.g. the unzipped folder, or
-   `dist/chrome/` if you built it locally).
-6. Auto Heartbeat appears in the toolbar; open it or its Settings page like any other extension.
+- **Chrome Web Store (recommended)**: install/update from the Chrome Web Store listing for this
+  extension like any other Chrome extension — Chrome then keeps it up to date automatically,
+  exactly like Firefox's `update_url` mechanism. Once the store review for the very first
+  submission clears, the listing appears on the Chrome Web Store for the extension id configured
+  in the `CHROME_EXTENSION_ID` GitHub Actions secret (see [RELEASE.md](RELEASE.md#chrome-web-store)).
+- **Unpacked (local/manual install)**: download `auto_heartbeat-<version>-chrome.zip` from the
+  project's [GitHub Releases](https://github.com/antalaron/auto-heartbeat/releases) page (the same
+  zip that's uploaded to the Chrome Web Store) and unzip it somewhere permanent, or build it
+  yourself — see [Development](#development) below. Then:
 
-This unpacked install does **not** auto-update; reinstall (steps 1–5) for a new version, or use
-**Update** in `chrome://extensions/` after replacing the directory's contents. If this project is
-published to the Chrome Web Store in the future, this section will be updated with the listing URL
-and a one-click install path; see [Chrome Web Store](#chrome-web-store) in [RELEASE.md](RELEASE.md)
-for what that would require.
+  1. Open `chrome://extensions/` in Chrome.
+  2. Enable **Developer mode** (top-right toggle).
+  3. Click **Load unpacked**.
+  4. Select the directory that directly contains `manifest.json` (e.g. the unzipped folder, or
+     `dist/chrome/` if you built it locally).
+  5. Auto Heartbeat appears in the toolbar; open it or its Settings page like any other extension.
+
+  This unpacked install does **not** auto-update; reinstall (steps 1–5) for a new version, or use
+  **Update** in `chrome://extensions/` after replacing the directory's contents. Use this method
+  for local development/testing (no Chrome Web Store account needed), or if you prefer not to
+  install from the store.
 
 ## Development
 
@@ -418,8 +424,9 @@ Then:
 3. Click **Load unpacked**.
 4. Select the generated `dist/chrome/` folder (it directly contains `manifest.json`).
 
-No Chrome Web Store account or publication is required for this — see
-[Chrome](#chrome-1) under Installation above and [RELEASE.md](RELEASE.md) for more detail.
+No Chrome Web Store account is needed for this local/unpacked workflow — see
+[Chrome](#chrome-1) under Installation above and [RELEASE.md](RELEASE.md#chrome-web-store) for how
+the release workflow publishes to the store instead.
 
 #### Reloading after changes
 
@@ -470,8 +477,6 @@ npm run build:chrome              # writes dist/chrome/ and ./web-ext-artifacts/
 - Configurable retry policy for transient network failures.
 - Configurable scheduler precision (sub-minute) for advanced use cases.
 - Rule grouping/tagging for users with many configured domains.
-- Chrome Web Store publication (currently Chrome is local-install/unpacked only — see
-  [RELEASE.md](RELEASE.md#chrome-web-store)).
 
 ## Releases
 
@@ -481,8 +486,11 @@ problem with one browser's build can never silently affect the other, or produce
 release:
 
 ```text
-validate ──┬─▶ firefox ──┐
-           └─▶ chrome  ──┴─▶ release
+validate
+   │
+   ├── firefox (build, sign with Mozilla)          ──┐
+   │                                                  ├──▶ release (GitHub Release, both assets)
+   └── chrome (build ZIP, publish to Chrome Web Store)┘
 ```
 
 - **`validate`**: checks the tag matches `vX.Y.Z`, and that it matches `manifest.json`'s
@@ -496,8 +504,10 @@ validate ──┬─▶ firefox ──┐
   `.xpi` is verified (valid ZIP, contains `META-INF/mozilla.rsa`, bundled `manifest.json` has the
   expected version/extension id) and, without modifying its bytes, renamed to
   `auto_heartbeat-X.Y.Z.xpi`.
-- **`chrome`**: builds the Chrome Manifest V3 package (`npm run build:chrome`) and produces
-  `auto_heartbeat-X.Y.Z-chrome.zip`. No Chrome Web Store submission is involved.
+- **`chrome`**: builds the Chrome Manifest V3 package (`npm run build:chrome`), producing
+  `auto_heartbeat-X.Y.Z-chrome.zip`, then uploads and publishes it to the **Chrome Web Store** via
+  the official Chrome Web Store API (see [RELEASE.md](RELEASE.md#chrome-web-store) for the
+  credentials/flow). A failed upload or publish fails this job.
 - **`release`**: only runs once **both** `firefox` and `chrome` succeed. It creates (or updates) the
   GitHub Release for the tag and attaches both `auto_heartbeat-X.Y.Z.xpi` and
   `auto_heartbeat-X.Y.Z-chrome.zip`, then regenerates the
