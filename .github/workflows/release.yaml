@@ -19,8 +19,14 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  release:
+  # Validates the tag/version and both manifests once, up front, so a malformed tag or manifest
+  # fails fast instead of after the (much slower) Firefox signing round-trip.
+  validate:
     runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+      version: ${{ steps.version.outputs.version }}
+      firefox_extension_id: ${{ steps.manifest.outputs.firefox_extension_id }}
     steps:
       - name: Checkout tag
         uses: actions/checkout@v7
@@ -41,20 +47,37 @@ jobs:
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
 
-      - name: Validate manifest.json matches the tag
+      - name: Validate manifest.json and manifest.chrome.json match the tag
         run: node scripts/validate-release.mjs --tag "${{ steps.version.outputs.tag }}"
 
-      - name: Read extension id from manifest.json
+      - name: Read Firefox extension id from manifest.json
         id: manifest
         run: |
           EXTENSION_ID="$(node -e "console.log(require('./manifest.json').browser_specific_settings.gecko.id)")"
-          echo "extension_id=$EXTENSION_ID" >> "$GITHUB_OUTPUT"
+          echo "firefox_extension_id=$EXTENSION_ID" >> "$GITHUB_OUTPUT"
 
-      - name: Lint extension source
-        run: npx --yes web-ext lint --source-dir=. --self-hosted --ignore-files "package.json" "scripts/**" "updates.json"
+  # Builds, signs (via Mozilla AMO) and verifies the Firefox .xpi. Entirely independent of the
+  # Chrome job below - a Chrome build problem can never block or corrupt the Firefox release.
+  firefox:
+    needs: validate
+    runs-on: ubuntu-latest
+    outputs:
+      filename: ${{ steps.signed.outputs.filename }}
+      sha256: ${{ steps.signed.outputs.sha256 }}
+    steps:
+      - name: Checkout tag
+        uses: actions/checkout@v7
 
-      - name: Build extension package
-        run: npx --yes web-ext build --source-dir=. --overwrite-dest --ignore-files "package.json" "scripts/**" "updates.json"
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
+      - name: Lint Firefox extension source
+        run: npm run lint
+
+      - name: Build Firefox extension package
+        run: npm run build:firefox
 
       # web-ext sign submits the built package to Mozilla's AMO signing API (channel=unlisted,
       # i.e. self-distributed), waits for the automated review/signing to complete, and downloads
@@ -70,7 +93,7 @@ jobs:
             --source-dir=. \
             --channel=unlisted \
             --artifacts-dir=./web-ext-artifacts \
-            --ignore-files "package.json" "scripts/**" "updates.json"
+            --ignore-files "package.json" "scripts/**" "updates.json" "manifest.chrome.json" "dist/**"
 
       # Confirms Mozilla actually returned a signed package matching this exact version/id, then
       # renames the untouched signed bytes to the human-readable release filename.
@@ -79,21 +102,96 @@ jobs:
         run: |
           chmod +x scripts/verify-signed-xpi.sh
           scripts/verify-signed-xpi.sh \
-            "${{ steps.version.outputs.version }}" \
+            "${{ needs.validate.outputs.version }}" \
             "./web-ext-artifacts" \
-            "${{ steps.manifest.outputs.extension_id }}"
+            "${{ needs.validate.outputs.firefox_extension_id }}"
+
+      - name: Upload signed XPI as workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: firefox-xpi
+          path: web-ext-artifacts/*.xpi
+          if-no-files-found: error
+          retention-days: 1
+
+  # Builds the Chrome Manifest V3 package (unpacked dir + release zip), then uploads and publishes
+  # it to the Chrome Web Store via the official chromewebstore/v1.1 API. A failed upload/publish
+  # fails this job, which in turn blocks the `release` job below - so the GitHub Release can never
+  # be created if the Chrome Web Store publish step didn't actually succeed.
+  chrome:
+    needs: validate
+    runs-on: ubuntu-latest
+    outputs:
+      filename: auto_heartbeat-${{ needs.validate.outputs.version }}-chrome.zip
+    steps:
+      - name: Checkout tag
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
+      - name: Build Chrome extension package
+        run: npm run build:chrome
+
+      # Exchanges the long-lived refresh token for a short-lived access token, uploads the zip as
+      # a new package version, then publishes it - the same OAuth/API flow Google documents for
+      # unattended CI publishing. The access token and API responses are never echoed to the log.
+      - name: Publish to Chrome Web Store
+        env:
+          CHROME_EXTENSION_ID: ${{ secrets.CHROME_EXTENSION_ID }}
+          CHROME_CLIENT_ID: ${{ secrets.CHROME_CLIENT_ID }}
+          CHROME_CLIENT_SECRET: ${{ secrets.CHROME_CLIENT_SECRET }}
+          CHROME_REFRESH_TOKEN: ${{ secrets.CHROME_REFRESH_TOKEN }}
+        run: |
+          chmod +x scripts/publish-chrome-webstore.sh
+          scripts/publish-chrome-webstore.sh "web-ext-artifacts/auto_heartbeat-${{ needs.validate.outputs.version }}-chrome.zip"
+
+      - name: Upload Chrome zip as workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: chrome-zip
+          path: web-ext-artifacts/*-chrome.zip
+          if-no-files-found: error
+          retention-days: 1
+
+  # Only runs once both browser jobs have succeeded - meaning Firefox is signed by Mozilla *and*
+  # the Chrome package has been built and published to the Chrome Web Store. A broken/rejected
+  # Chrome Web Store publish can therefore never produce a GitHub Release missing (or silently
+  # omitting) the Chrome asset, and a broken/rejected Firefox signature can never produce a
+  # misleadingly "successful" release either.
+  release:
+    needs: [validate, firefox, chrome]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout tag
+        uses: actions/checkout@v7
+
+      - name: Download Firefox XPI artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: firefox-xpi
+          path: release-assets
+
+      - name: Download Chrome zip artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: chrome-zip
+          path: release-assets
 
       - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          TAG="${{ steps.version.outputs.tag }}"
-          ASSET="${{ steps.signed.outputs.path }}"
+          TAG="${{ needs.validate.outputs.tag }}"
+          FIREFOX_ASSET="release-assets/${{ needs.firefox.outputs.filename }}"
+          CHROME_ASSET="release-assets/${{ needs.chrome.outputs.filename }}"
           if gh release view "$TAG" --repo "${{ github.repository }}" >/dev/null 2>&1; then
-            echo "Release $TAG already exists; (re-)uploading the signed asset."
-            gh release upload "$TAG" "$ASSET" --repo "${{ github.repository }}" --clobber
+            echo "Release $TAG already exists; (re-)uploading assets."
+            gh release upload "$TAG" "$FIREFOX_ASSET" "$CHROME_ASSET" --repo "${{ github.repository }}" --clobber
           else
-            gh release create "$TAG" "$ASSET" \
+            gh release create "$TAG" "$FIREFOX_ASSET" "$CHROME_ASSET" \
               --repo "${{ github.repository }}" \
               --title "Auto Heartbeat $TAG" \
               --generate-notes
@@ -102,6 +200,7 @@ jobs:
       # Firefox's automatic update mechanism polls manifest.json's update_url (a stable
       # raw.githubusercontent.com URL) for this JSON file. It must only be updated once the
       # release asset it points to already exists, and old version history must be preserved.
+      # Chrome has no equivalent self-hosted update mechanism to maintain here.
       - name: Update Firefox update manifest
         env:
           GH_TOKEN: ${{ github.token }}
@@ -109,22 +208,22 @@ jobs:
           git fetch origin "${{ github.event.repository.default_branch }}"
           git checkout "${{ github.event.repository.default_branch }}"
 
-          UPDATE_LINK="https://github.com/${{ github.repository }}/releases/download/${{ steps.version.outputs.tag }}/${{ steps.signed.outputs.filename }}"
+          UPDATE_LINK="https://github.com/${{ github.repository }}/releases/download/${{ needs.validate.outputs.tag }}/${{ needs.firefox.outputs.filename }}"
 
           node scripts/generate-update-manifest.mjs \
-            --version "${{ steps.version.outputs.version }}" \
+            --version "${{ needs.validate.outputs.version }}" \
             --update-link "$UPDATE_LINK" \
-            --update-hash "sha256:${{ steps.signed.outputs.sha256 }}"
+            --update-hash "sha256:${{ needs.firefox.outputs.sha256 }}"
 
           node -e "
             const { version } = require('./manifest.json');
             const updates = require('./updates.json');
-            const id = '${{ steps.manifest.outputs.extension_id }}';
+            const id = '${{ needs.validate.outputs.firefox_extension_id }}';
             const addon = updates.addons && updates.addons[id];
             if (!addon) throw new Error('updates.json is missing an entry for ' + id);
             const entry = addon.updates.find((u) => u.version === version);
             if (!entry) throw new Error('updates.json is missing an entry for version ' + version);
-            if (!entry.update_link.endsWith('${{ steps.signed.outputs.filename }}')) {
+            if (!entry.update_link.endsWith('${{ needs.firefox.outputs.filename }}')) {
               throw new Error('updates.json update_link does not reference the signed XPI');
             }
             console.log('updates.json OK: ' + entry.update_link);
@@ -136,6 +235,6 @@ jobs:
           if git diff --cached --quiet; then
             echo "updates.json already up to date; nothing to commit."
           else
-            git commit -m "chore: publish update manifest for ${{ steps.version.outputs.tag }}"
+            git commit -m "chore: publish update manifest for ${{ needs.validate.outputs.tag }}"
             git push origin "HEAD:${{ github.event.repository.default_branch }}"
           fi

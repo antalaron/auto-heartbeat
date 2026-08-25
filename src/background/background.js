@@ -1,3 +1,4 @@
+import '../shared/browserPolyfill.js';
 import { ALARM_NAME, SCHEDULER_PERIOD_MINUTES } from '../shared/constants.js';
 import { MESSAGE_TYPES } from '../shared/messaging.js';
 import * as storageManager from '../storage/storageManager.js';
@@ -37,12 +38,19 @@ browser.alarms.onAlarm.addListener((alarm) => {
   });
 });
 
-browser.runtime.onMessage.addListener((message) => {
+// Chrome requires listeners to call `sendResponse` and return `true` to keep
+// the message channel open for an async response; Firefox supports that same
+// pattern too (in addition to returning a Promise directly), so this works
+// identically on both browsers.
+browser.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (!message || message.type !== MESSAGE_TYPES.RUN_SCHEDULER_NOW) return undefined;
 
-  return runSchedulerTick()
-    .then(() => ({ ok: true }))
-    .catch((error) => ({ ok: false, error: error && error.message ? error.message : String(error) }));
+  runSchedulerTick()
+    .then(() => sendResponse({ ok: true }))
+    .catch((error) =>
+      sendResponse({ ok: false, error: error && error.message ? error.message : String(error) })
+    );
+  return true;
 });
 
 // Defensive re-registration: covers event-page reloads during development

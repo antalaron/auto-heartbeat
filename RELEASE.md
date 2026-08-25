@@ -1,15 +1,21 @@
 # Release
 
-This document describes how **Auto Heartbeat** is released as a Mozilla-signed, **unlisted
-(self-distributed)** Firefox extension.
+This document describes how **Auto Heartbeat** is released for both browsers it supports:
+
+- **Firefox**, as a Mozilla-signed, **unlisted (self-distributed)** extension (`.xpi`).
+- **Chrome**, as a Manifest V3 extension package (`.zip`), automatically published to the
+  **Chrome Web Store** on every tagged release, and also attached to the GitHub Release for
+  local/manual installation — see [Chrome Release](#chrome-release) and
+  [Chrome Web Store](#chrome-web-store) below.
 
 **The release process is fully automated** by
-[`.github/workflows/release.yml`](.github/workflows/release.yml) — see the README's
-[Releases](README.md#releases) section for how to trigger it and what it does. This document
-covers the terminology, prerequisites, and Mozilla-side concepts the workflow implements, for
-whoever maintains this repository and needs to understand or change that pipeline, possibly months
-after it was last touched. It intentionally does **not** cover local development/debugging — see
-the [Development](README.md#development) section of the README for that.
+[`.github/workflows/release.yaml`](.github/workflows/release.yaml) — see
+[DEVELOPMENT.md](DEVELOPMENT.md#releases) for how to trigger it and what it does, and
+[GitHub Actions](#github-actions) below for the job structure. This document covers the
+terminology, prerequisites, and Mozilla-side concepts the workflow implements, for whoever
+maintains this repository and needs to understand or change that pipeline, possibly months after
+it was last touched. It intentionally does **not** cover local development/debugging — see
+[DEVELOPMENT.md](DEVELOPMENT.md#development) for that.
 
 ## Terminology
 
@@ -44,15 +50,15 @@ signature enforcement disabled, which is not a real distribution mechanism for e
 - An **AMO API key/secret** pair, generated at
   [addons.mozilla.org/developers/addon/api/key/](https://addons.mozilla.org/developers/addon/api/key/),
   stored as the `WEB_EXT_API_KEY` / `WEB_EXT_API_SECRET` GitHub Actions repository secrets (see
-  README's [Mozilla Signing Credentials](README.md#mozilla-signing-credentials)). Treat these like
+  this document's [GitHub Actions Secrets](#github-actions-secrets) section). Treat these like
   a password: never commit them or print them in workflow logs.
 - Read the [Add-on Policies](https://extensionworkshop.com/documentation/publish/add-on-policies/)
   and the
   [Firefox Add-on Distribution Agreement](https://extensionworkshop.com/documentation/publish/firefox-add-on-distribution-agreement/)
   — both apply to unlisted extensions too.
 
-Both the [release workflow](.github/workflows/release.yml) and the local `npm run lint`/`npm run
-build` scripts (see README's [Local validation](README.md#local-validation)) use
+Both the [release workflow](.github/workflows/release.yaml) and the local `npm run lint`/`npm run
+build` scripts (see [DEVELOPMENT.md § Local validation](DEVELOPMENT.md#local-validation)) use
 [`web-ext`](https://extensionworkshop.com/documentation/develop/getting-started-with-web-ext/),
 Mozilla's own recommended CLI for linting, packaging and signing WebExtensions, invoked with `npx`
 (no need to add it as a project dependency). [`package.json`](package.json) in this repository only
@@ -87,7 +93,7 @@ workflow fails the job if any appear, since AMO's validator would reject the sub
 
 Before tagging, bump `"version"` in [manifest.json](manifest.json) and commit it to `master` — see
 [Versioning](#versioning) below. The workflow validates that the tag and this version match
-(see [Version Source of Truth](README.md#releases) in the README) before building anything.
+(see [DEVELOPMENT.md § Releases](DEVELOPMENT.md#releases)) before building anything.
 
 ## 2. Build the release package (automated)
 
@@ -125,8 +131,8 @@ unsigned package is never published (see [How Mozilla's review/signing works](#4
 below).
 
 `$WEB_EXT_API_KEY` / `$WEB_EXT_API_SECRET` come from the `WEB_EXT_API_KEY` / `WEB_EXT_API_SECRET`
-GitHub Actions secrets (see the README's
-[Mozilla Signing Credentials](README.md#mozilla-signing-credentials)) — the workflow never echoes
+GitHub Actions secrets (see this document's
+[GitHub Actions Secrets](#github-actions-secrets) section) — the workflow never echoes
 them.
 
 ## 4. How Mozilla's review/signing works
@@ -202,7 +208,7 @@ Firefox updates a self-distributed add-on in one of two ways
 
 (Using `raw.githubusercontent.com` against a file checked into this repo is a convenient
 "own server" for a GitHub-hosted project and needs no extra infrastructure or authentication;
-see [Firefox Automatic Updates](README.md#firefox-automatic-updates) in the README.)
+see [DEVELOPMENT.md § Firefox Automatic Updates](DEVELOPMENT.md#firefox-automatic-updates).)
 
 **Important:** once a signed version with a given `update_url` is installed by users, that URL is
 what their existing installs will keep polling. Don't move/rename the update manifest without a
@@ -247,16 +253,167 @@ extension ID — for this project, `auto-heartbeat@antalaron.hu`:
 
 ## 10. Releasing a new version (automated)
 
-See the README's [Creating a Release](README.md#creating-a-release) section. In short:
+See the README's [Creating a Release](DEVELOPMENT.md#creating-a-release) section (in
+[DEVELOPMENT.md](DEVELOPMENT.md)). In short:
 
 1. Bump `"version"` in [manifest.json](manifest.json) (see [Versioning](#versioning)) and commit
    it to `master`.
 2. `git tag vX.Y.Z && git push origin vX.Y.Z`.
-3. The [release workflow](.github/workflows/release.yml) runs steps 1–9 above automatically:
-   validates the tag against the manifest version, lints and builds, submits to Mozilla for
-   signing, verifies and renames the signed `.xpi`, publishes the GitHub Release, and regenerates
-   `updates.json` (only after the release asset exists).
+3. The [release workflow](.github/workflows/release.yaml) validates the tag against the manifest
+   version, builds and signs Firefox (steps 1–9 above), builds Chrome and publishes it to the
+   Chrome Web Store (see [Chrome Release](#chrome-release) below), and — only once both browser
+   jobs succeed — publishes the GitHub Release with both artifacts and regenerates `updates.json`.
+   See [GitHub Actions](#github-actions) for the exact job structure.
 4. Spot-check per [Verify the release](#verify-the-release) below once the workflow finishes.
+
+## Chrome Release
+
+Unlike Firefox, Chrome extensions do not require third-party signing to be installed locally —
+Manifest V3 packages just need to be a valid, well-formed zip of the extension source. Pushing a
+version tag automatically **builds, uploads and publishes** the Chrome package to the Chrome Web
+Store; there is no separate manual publishing step to run.
+
+1. **Building**: `npm run build:chrome` (wraps
+   [`scripts/build-chrome.mjs`](scripts/build-chrome.mjs)) assembles an unpacked Chrome build at
+   `dist/chrome/`, merging [`manifest.chrome.json`](manifest.chrome.json) (which never hard-codes a
+   `"version"`) with the version from the root [`manifest.json`](manifest.json) — the same single
+   source of truth Firefox uses, so the two browser builds and the Git tag can never disagree (see
+   [Versioning](#versioning)). The script fails loudly if `manifest.chrome.json` doesn't declare
+   `"manifest_version": 3`, doesn't declare `background.service_worker`, or declares the
+   Manifest-V2-only `background.scripts`/`background.persistent` fields.
+2. **Manifest V3**: `manifest.chrome.json` declares `"background": { "service_worker": "...",
+   "type": "module" }` — a Chrome Manifest V3 service worker — instead of Firefox's
+   `background.scripts` event page. See [Manifest differences](DEVELOPMENT.md#manifest-differences) in
+   DEVELOPMENT.md for the full field-by-field comparison, including why Chrome's permission list is
+   deliberately smaller (no `cookies`/`contextualIdentities`, since Chrome has no Multi-Account
+   Containers equivalent).
+3. **Packaging**: the same script then zips `dist/chrome/` into
+   `web-ext-artifacts/auto_heartbeat-<version>-chrome.zip` using the system `zip` CLI (already
+   present on GitHub's `ubuntu-latest` runners and on macOS/Linux locally — no extra dependency).
+4. **Publishing**: [`scripts/publish-chrome-webstore.sh`](scripts/publish-chrome-webstore.sh)
+   uploads and publishes that zip to the Chrome Web Store — see
+   [Chrome Web Store](#chrome-web-store) below for exactly how.
+5. **Release artifact naming**: `auto_heartbeat-<version>-chrome.zip`, clearly distinct from
+   Firefox's `auto_heartbeat-<version>.xpi` (see [GitHub Release](#github-actions) below). The same
+   zip that's published to the Chrome Web Store is also attached to the GitHub Release, so both
+   distribution channels always ship byte-identical packages for a given version.
+
+### Chrome Web Store
+
+The release workflow's `chrome` job authenticates to the official
+[Chrome Web Store API](https://developer.chrome.com/docs/webstore/using_webstore_api/)
+(`chromewebstore/v1.1`) using an OAuth2 refresh-token flow — the same mechanism Google documents
+for unattended/CI publishing — then uploads the built zip as a new package version and publishes
+it. Concretely, [`scripts/publish-chrome-webstore.sh`](scripts/publish-chrome-webstore.sh):
+
+1. Exchanges `CHROME_CLIENT_ID` / `CHROME_CLIENT_SECRET` / `CHROME_REFRESH_TOKEN` for a short-lived
+   access token via `POST https://oauth2.googleapis.com/token`.
+2. Uploads the zip as a new draft package version via
+   `PUT https://www.googleapis.com/upload/chromewebstore/v1.1/items/{CHROME_EXTENSION_ID}` and
+   confirms the response reports `"uploadState": "SUCCESS"`.
+3. Publishes that uploaded version via
+   `POST https://www.googleapis.com/chromewebstore/v1.1/items/{CHROME_EXTENSION_ID}/publish` and
+   confirms the response reports `"status": ["OK"]` or `["ITEM_PENDING_REVIEW"]` (a normal outcome
+   for extensions that require Google's manual review before going live).
+
+Any non-success response at any step (rejected credentials, upload validation error, publish
+rejection, ...) makes the script — and therefore the `chrome` job and the whole release — fail;
+the access token and full API responses are never echoed to the workflow log.
+
+#### Obtaining Chrome Web Store credentials
+
+1. Register as a [Chrome Web Store developer](https://chrome.google.com/webstore/devconsole/) if
+   you haven't already (one-time, per-account fee) and create/claim the extension's listing to
+   obtain its **item/extension ID** — this becomes the `CHROME_EXTENSION_ID` secret.
+2. In the [Google Cloud Console](https://console.cloud.google.com/apis/credentials), create an
+   OAuth 2.0 **Desktop app** client for the same Google account that manages the Web Store listing.
+   This gives you a **client ID** and **client secret** — `CHROME_CLIENT_ID` /
+   `CHROME_CLIENT_SECRET`.
+3. Enable the **Chrome Web Store API** for that Cloud project.
+4. Generate a **refresh token** once, locally, using that client ID/secret via the standard OAuth2
+   installed-app flow (authorize with scope `https://www.googleapis.com/auth/chromewebstore`,
+   exchange the returned authorization code for tokens, keep only the `refresh_token`) — this
+   becomes `CHROME_REFRESH_TOKEN`. This step is interactive and is only ever done once, outside of
+   CI; the refresh token is what CI reuses indefinitely afterward.
+
+#### Required GitHub secrets
+
+| Secret                  | Purpose                                                                 |
+|--------------------------|--------------------------------------------------------------------------|
+| `CHROME_EXTENSION_ID`    | The Chrome Web Store item/extension ID being published to. Never hard-coded into the workflow or source. |
+| `CHROME_CLIENT_ID`       | OAuth 2.0 client ID for the Chrome Web Store API.                        |
+| `CHROME_CLIENT_SECRET`   | OAuth 2.0 client secret paired with the client ID above.                 |
+| `CHROME_REFRESH_TOKEN`   | Long-lived OAuth 2.0 refresh token authorizing unattended publishing on behalf of the Web Store developer account. |
+
+All four are configured under Settings → Secrets and variables → Actions and are only ever read
+from `secrets.*` inside the `chrome` job (see [GitHub Actions Secrets](#github-actions-secrets)).
+
+#### Chrome Web Store publication vs. the GitHub Release
+
+These are two independent distribution channels that happen to be produced from the same build in
+the same workflow run:
+
+- The **Chrome Web Store listing** is what most users install/update from; Chrome updates it
+  automatically, and Google may subject new versions to manual review (`ITEM_PENDING_REVIEW`)
+  before they go live — this can take longer than the workflow run itself.
+- The **GitHub Release** `auto_heartbeat-X.Y.Z-chrome.zip` asset is the same package, provided for
+  local/unpacked installation (see the README's [Chrome installation](README.md#chrome) section)
+  and for anyone who wants to inspect exactly what was published without waiting on a store review.
+
+## GitHub Actions
+
+Pushing a tag matching `vX.Y.Z` runs [`.github/workflows/release.yaml`](.github/workflows/release.yaml),
+which has four jobs:
+
+```text
+validate ──┬──▶ firefox                              ──┐
+           └──▶ chrome (build zip, then Web Store publish) ──▶ release
+```
+
+- **`validate`**: parses and validates the tag format, checks it matches `manifest.json`'s
+  `"version"`, and validates the shape of both `manifest.json` and `manifest.chrome.json` (see
+  [`scripts/validate-release.mjs`](scripts/validate-release.mjs)). Everything downstream depends on
+  this job, so a bad tag or manifest never reaches Mozilla, the Chrome Web Store, or produces any
+  artifact.
+- **`firefox`**: lints, builds, and submits the extension to Mozilla for signing (steps 1–6 above),
+  then verifies and renames the signed `.xpi`, uploading it as a short-lived workflow artifact.
+  Entirely independent of the `chrome` job — nothing here can be affected by a Chrome-side problem.
+- **`chrome`**: builds and zips the Chrome package, then uploads and publishes it to the Chrome Web
+  Store (see [Chrome Release](#chrome-release) above), uploading the zip as a short-lived workflow
+  artifact only after the Web Store publish step succeeds. Independent of the `firefox` job. A
+  failed upload or publish fails this job outright — it never reports success while quietly having
+  skipped publishing.
+- **`release`**: only runs if **both** `firefox` and `chrome` succeed (a normal `needs:` dependency
+  in GitHub Actions — if either upstream job fails, `release` is skipped entirely). It downloads
+  both workflow artifacts, creates or updates the GitHub Release for the tag with both files
+  attached, and regenerates/pushes the [Firefox update manifest](#8-automatic-updates-for-a-self-distributed-extension-configured).
+
+This structure is what guarantees: a failed Mozilla signing can never produce a misleading
+"successful" release (the `release` job simply never runs), and a failed Chrome Web Store
+upload/publish can never produce a GitHub Release that's missing the Chrome asset (same reason, in
+the other direction) — nor can it silently report the overall workflow as successful.
+
+## GitHub Actions Secrets
+
+| Secret                  | Used by       | Purpose                                                              |
+|--------------------------|--------------|-------------------------------------------------------------------------|
+| `WEB_EXT_API_KEY`        | `firefox` job | AMO API key (JWT issuer) identifying the Mozilla account allowed to sign this add-on. |
+| `WEB_EXT_API_SECRET`     | `firefox` job | AMO API secret (JWT secret) paired with the key above.               |
+| `CHROME_EXTENSION_ID`    | `chrome` job  | Chrome Web Store item/extension ID being published to.               |
+| `CHROME_CLIENT_ID`       | `chrome` job  | OAuth 2.0 client ID for the Chrome Web Store API.                     |
+| `CHROME_CLIENT_SECRET`   | `chrome` job  | OAuth 2.0 client secret paired with `CHROME_CLIENT_ID`.               |
+| `CHROME_REFRESH_TOKEN`   | `chrome` job  | Long-lived OAuth 2.0 refresh token used to mint access tokens for unattended publishing. |
+
+The Mozilla credentials are generated at
+[addons.mozilla.org/developers/addon/api/key/](https://addons.mozilla.org/developers/addon/api/key/);
+the Chrome Web Store credentials are obtained as described in
+[Obtaining Chrome Web Store credentials](#obtaining-chrome-web-store-credentials) above. All six
+secrets are configured under Settings → Secrets and variables → Actions and are only ever read from
+`secrets.*` inside the workflow — none are printed, logged, or written to any committed file.
+
+The workflow's `permissions:` block grants only `contents: write` (create releases, push
+`updates.json`) — no `issues`, `packages`, or other scopes are requested. Calling the external
+Chrome Web Store and Mozilla AMO APIs requires no additional GitHub-side permissions.
 
 ## Versioning
 
@@ -266,6 +423,19 @@ See the README's [Creating a Release](README.md#creating-a-release) section. In 
 `1.2.0`, `1.2.0b1`). Each submitted version must be strictly greater than the previous one; AMO
 rejects re-uploads of an existing version number. This project currently uses plain semantic-style
 versions (`1.0.0`), which is fully compatible.
+
+There is exactly **one** version for the whole project, and the Git tag is its single source of
+truth end-to-end:
+
+- `manifest.json`'s `"version"` is bumped by hand and committed before tagging.
+- `manifest.chrome.json` never declares its own `"version"` at all — [`scripts/build-chrome.mjs`](scripts/build-chrome.mjs)
+  always injects it from `manifest.json` at build time, so the Chrome build can never drift from
+  the Firefox one.
+- The pushed tag (`vX.Y.Z`) must match `manifest.json`'s `"version"` (`X.Y.Z`); the `validate` job
+  fails the whole workflow otherwise.
+- The resulting GitHub Release is named after that same tag, with both browser artifacts embedding
+  that same version number in their filenames (`auto_heartbeat-X.Y.Z.xpi`,
+  `auto_heartbeat-X.Y.Z-chrome.zip`).
 
 ## Restrictions and caveats for self-distributed extensions
 
@@ -297,36 +467,53 @@ versions (`1.0.0`), which is fully compatible.
 
 Once the release workflow finishes, before telling users about a new release:
 
-1. Confirm the GitHub Release (Actions tab → workflow run, or the Releases page) has exactly one
-   asset, named `auto_heartbeat-<version>.xpi`.
+1. Confirm the GitHub Release (Actions tab → workflow run, or the Releases page) has exactly two
+   assets: `auto_heartbeat-<version>.xpi` and `auto_heartbeat-<version>-chrome.zip`.
 2. Install the signed `.xpi` fresh via `about:addons` → **Install Add-on From File...** in a clean
    Firefox profile, and confirm:
    - It installs without a "corrupt" or "could not be verified" error (this indicates a signing
      problem).
    - `manifest.json`'s permissions/description shown at install time match expectations.
    - The extension's popup and Settings page open and basic rule scheduling works.
-3. Confirm `updates.json` on `master` (and at its published
+3. Unzip `auto_heartbeat-<version>-chrome.zip` and load it via `chrome://extensions/` → **Load
+   unpacked** in a clean Chrome profile, and confirm:
+   - It loads without a manifest error.
+   - The unzipped `manifest.json`'s `"version"` matches the release.
+   - The extension's popup and Settings page open, and the service worker is inspectable (see the
+     the README's [Chrome debugging](DEVELOPMENT.md#chrome) instructions).
+4. Confirm the `chrome` job's "Publish to Chrome Web Store" step succeeded, and check the
+   [Chrome Web Store developer dashboard](https://chrome.google.com/webstore/devconsole/) shows
+   the new version as either live or `ITEM_PENDING_REVIEW` for the extension id in
+   `CHROME_EXTENSION_ID`.
+4. Confirm `updates.json` on `master` (and at its published
    `raw.githubusercontent.com` URL) contains an entry for the new version whose `update_link`
-   matches the Release asset.
-4. Confirm the GitHub Release links (README's Installation section) point at the correct asset
-   URLs and version.
+   matches the Firefox Release asset.
+5. Confirm the GitHub Release links (README's Installation section) point at the correct asset
+   URLs and version, for both browsers.
 
 ## Release checklist
 
-The [release workflow](.github/workflows/release.yml) performs all of these automatically; this is
+The [release workflow](.github/workflows/release.yaml) performs all of these automatically; this is
 for manually re-verifying a release afterward, or for reasoning about workflow changes:
 
 - [ ] Version bumped in [manifest.json](manifest.json) and committed to `master`
 - [ ] Tag `vX.Y.Z` pushed, matching `manifest.json`'s version
-- [ ] `web-ext lint --self-hosted` passed with no errors
-- [ ] `web-ext build` produced the expected zip
-- [ ] Submitted via `web-ext sign --channel=unlisted` and signing succeeded
-- [ ] Signed `.xpi` verified (contains `META-INF/mozilla.rsa`, matches expected version/id) and
-      renamed to `auto_heartbeat-<version>.xpi`
-- [ ] GitHub Release published with that `.xpi` attached
+- [ ] `validate` job: tag/manifest versions agree; `manifest.chrome.json` shape is valid
+- [ ] `firefox` job: `web-ext lint --self-hosted` passed with no errors
+- [ ] `firefox` job: `web-ext build` produced the expected zip
+- [ ] `firefox` job: submitted via `web-ext sign --channel=unlisted` and signing succeeded
+- [ ] `firefox` job: signed `.xpi` verified (contains `META-INF/mozilla.rsa`, matches expected
+      version/id) and renamed to `auto_heartbeat-<version>.xpi`
+- [ ] `chrome` job: `npm run build:chrome` produced `auto_heartbeat-<version>-chrome.zip` with a
+      Manifest V3 `background.service_worker` and no `background.scripts`/`persistent`
+- [ ] `chrome` job: `scripts/publish-chrome-webstore.sh` uploaded and published the zip to the
+      Chrome Web Store (`uploadState: SUCCESS`, `status: OK` or `ITEM_PENDING_REVIEW`)
+- [ ] `release` job only ran after both `firefox` and `chrome` succeeded
+- [ ] GitHub Release published with both `auto_heartbeat-<version>.xpi` and
+      `auto_heartbeat-<version>-chrome.zip` attached
 - [ ] `updates.json` updated with the new version's `update_link`/`update_hash`, referencing the
-      published Release asset
-- [ ] README's install link/instructions still accurate
+      published Firefox Release asset
+- [ ] README's install link/instructions still accurate for both browsers
 
 ## References
 
@@ -340,3 +527,5 @@ for manually re-verifying a release afterward, or for reasoning about workflow c
 - [Firefox Add-on Distribution Agreement](https://extensionworkshop.com/documentation/publish/firefox-add-on-distribution-agreement/) — Extension Workshop
 - [`browser_specific_settings`](https://developer.mozilla.org/en-US/docs/Mozilla/Add-ons/WebExtensions/manifest.json/browser_specific_settings) — MDN
 - [`version` format](https://developer.mozilla.org/en-US/docs/Mozilla/Add-ons/WebExtensions/manifest.json/version) — MDN
+- [Chrome Web Store API (`chromewebstore/v1.1`)](https://developer.chrome.com/docs/webstore/using_webstore_api/) — Chrome for Developers
+- [Chrome Web Store Developer Program Policies](https://developer.chrome.com/docs/webstore/program-policies/) — Chrome for Developers

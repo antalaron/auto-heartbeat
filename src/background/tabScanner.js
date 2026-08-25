@@ -43,6 +43,9 @@ export async function getOpenTabsInfo() {
     const hostname = extractHostname(tab.url);
     if (!hostname) continue;
 
+    // Chrome tabs have no `cookieStoreId` (no Multi-Account Containers concept),
+    // so they all fall back to the same constant here, which naturally groups
+    // every matching Chrome tab into a single session per rule in sessionResolver.
     results.push({
       tabId: tab.id,
       hostname,

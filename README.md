@@ -1,11 +1,50 @@
 # Auto Heartbeat
 
-A Firefox browser extension that automatically keeps selected web sessions alive by sending
-periodic, configurable HTTP "heartbeat" requests — but **only** while a matching browser tab is
-actually open. If no matching tab exists, the extension does nothing at all.
+A **Firefox and Chrome** browser extension that automatically keeps selected web sessions alive
+by sending periodic, configurable HTTP "heartbeat" requests — but **only** while a matching
+browser tab is actually open. If no matching tab exists, the extension does nothing at all.
 
 Built with production-quality engineering: Manifest V3, ES modules, no frameworks, no
-telemetry, and full support for Firefox Multi-Account Containers.
+telemetry, full support for Firefox Multi-Account Containers, and a Chrome Manifest V3 service
+worker build that shares nearly all of its logic with the Firefox build.
+
+> Contributing or building from source? See [DEVELOPMENT.md](DEVELOPMENT.md). For the release
+> process, see [RELEASE.md](RELEASE.md). For the privacy policy, see
+> [PRIVACY_POLICY.md](PRIVACY_POLICY.md).
+
+## Supported Browsers
+
+| Browser | Manifest | Background | Container/session model |
+|---------|----------|-------------|--------------------------|
+| Firefox | Manifest V3 (event-page style `background.scripts`) | Long-lived event page, restarted automatically by `browser.alarms` | Firefox Multi-Account Containers: each container is an independent `cookieStoreId` and gets its own heartbeat. |
+| Chrome  | Manifest V3 (`background.service_worker`) | Ephemeral service worker, woken up by `chrome.alarms` | No container concept. All tabs in a Chrome profile share one cookie context, so matching tabs are deduplicated into a single heartbeat per rule. |
+
+Both builds share essentially the same source code under [`src/`](src/) — see
+[DEVELOPMENT.md](DEVELOPMENT.md#architecture) for exactly what's shared versus browser-specific.
+
+### Firefox: Multi-Account Containers
+
+See [Firefox Containers](#firefox-containers) below — this behavior is unchanged from prior
+versions.
+
+### Chrome: single shared session per profile
+
+Chrome has no equivalent to Firefox's `cookieStoreId`/Multi-Account Containers. Within one Chrome
+profile, every tab shares the same cookie jar, so:
+
+```text
+Chrome
+├── Tab 1 → portal.example.com
+├── Tab 2 → portal.example.com
+└── Tab 3 → portal.example.com
+```
+
+is one authenticated session, not three. Auto Heartbeat's scheduler already groups matching tabs
+by `(rule, cookieStoreId)` (see [DEVELOPMENT.md](DEVELOPMENT.md#scheduling-implementation)); since
+Chrome tabs never report a `cookieStoreId`, every matching Chrome tab for a given rule falls into the same group automatically
+— so exactly **one** heartbeat is sent per rule, no matter how many matching tabs are open, and it
+stops the moment the last matching tab closes. Auto Heartbeat does **not** attempt to fake or
+emulate Firefox container names/behavior on Chrome.
 
 ## Overview
 
@@ -28,12 +67,9 @@ cookieStoreId)** pair rather than per domain alone. That means:
 
 - `portal.example.com` open in the **Personal** container and the **Work** container are treated
   as two completely independent sessions.
-- Each session gets its own timer and its own heartbeat request.
-- Each request is executed **inside the matching tab itself** (via
-  `browser.scripting.executeScript`), so it automatically reuses that tab's cookie store. This is
-  the most robust way to guarantee a request is authenticated as the correct container — a
-  request fired from the background script would otherwise always use the default (non-container)
-  cookie jar and could never authenticate as a specific container's session.
+- Each session gets its own timer and its own heartbeat request, sent using that tab's own
+  container-scoped cookies — so it's always authenticated as the correct container's session (see
+  [DEVELOPMENT.md](DEVELOPMENT.md#scheduling-implementation) for the implementation).
 - If you close every tab for a given container, that session's heartbeat stops; the other
   container's heartbeat, if still open, keeps running unaffected.
 
@@ -58,39 +94,6 @@ the same time, with zero cross-contamination between containers.
 - Never crashes on bad input: malformed URLs, invalid JSON headers, invalid intervals, network
   failures, and storage errors are all caught and logged instead of throwing.
 - No analytics, no telemetry, no third-party network calls of any kind.
-
-## Architecture
-
-```text
-/
-├── manifest.json         Manifest V3 definition (Firefox)
-├── README.md
-├── LICENSE
-├── icons/                 Toolbar/app icons (SVG source + generated PNGs)
-│
-└── src/
-    ├── background/        Service worker / event page: scheduler and its collaborators
-    │   ├── background.js       Entry point: alarm registration, message routing
-    │   ├── scheduler.js        Orchestrates a single scheduler tick
-    │   ├── tabScanner.js       Enumerates open tabs into minimal, matchable info
-    │   ├── sessionResolver.js  Groups matching tabs into (rule, container) sessions
-    │   ├── containerService.js Resolves human-readable container names
-    │   └── heartbeatExecutor.js Runs the fetch() inside the matching tab's context
-    │
-    ├── popup/              Toolbar popup (stats, active countdowns, recent activity)
-    ├── options/             Settings page (rule list, add/edit dialog, activity log)
-    │
-    ├── storage/             browser.storage.local access, schema and migrations
-    ├── models/              Plain data factories for configs and log entries
-    ├── services/            Business logic shared across UI and background contexts
-    ├── utils/               Small, dependency-free helpers (validation, formatting, IDs)
-    └── shared/              Constants, cross-context messaging, and the shared theme
-```
-
-Each layer has a single responsibility: **models** define shape, **storage** persists it,
-**services** implement CRUD/business rules on top of storage, and **background** wires everything
-together into the actual scheduling behavior. The popup and options pages import the same
-services directly — there is no duplicated business logic between UI surfaces.
 
 ## Configuration
 
@@ -134,30 +137,6 @@ ignored.
 - **Wildcard match**: `*.example.com` matches `portal.example.com`, `sub.portal.example.com`, and
   the bare `example.com` itself (i.e. the wildcard also matches its own base domain).
 
-## Scheduling
-
-A `browser.alarms` alarm fires once every minute and triggers a single scheduler "tick":
-
-1. If there are no enabled rules, do nothing (skip tab enumeration entirely).
-2. Enumerate all open browser tabs (`browser.tabs.query({})`), reducing each to its hostname and
-   `cookieStoreId`, and discarding tabs with unsupported protocols (internal pages, `file://`,
-   etc.).
-3. For every enabled rule, find tabs whose hostname matches its domain pattern, and group them by
-   `cookieStoreId`. Each unique `(rule, cookieStoreId)` pair is one **active session** — multiple
-   matching tabs in the same container collapse into a single session.
-4. For each active session, check how long it has been since the last heartbeat. If the
-   configured interval has elapsed (or no heartbeat has ever been sent for that session), send one
-   heartbeat request; otherwise, skip it until it's due.
-5. Heartbeat requests are executed via `browser.scripting.executeScript` inside one representative
-   tab for that session, using `fetch()` with `credentials: "include"` and `cache: "no-store"` so
-   the request reuses the tab's own (container-scoped) cookies and never a stale cached response.
-6. The outcome (success, HTTP status, duration, or error) is recorded to the activity log, and a
-   lightweight "active sessions" summary is cached in storage for the popup to render instantly
-   without re-scanning tabs itself.
-
-If no tabs match any enabled rule, the scheduler clears its cached state and performs no further
-work until a matching tab reappears.
-
 ## Logging
 
 Up to **500** of the most recent log entries are kept in `browser.storage.local`; once the limit
@@ -177,6 +156,11 @@ entries, in the toolbar popup.
 
 ## Permissions
 
+Firefox and Chrome are reviewed for **minimum required permissions independently** — Chrome does
+not receive Firefox-only permissions it has no use for.
+
+### Firefox (`manifest.json`)
+
 | Permission            | Why it's needed                                                                 |
 |-----------------------|----------------------------------------------------------------------------------|
 | `storage`              | Persist rules, activity logs and scheduler state locally.                       |
@@ -187,32 +171,29 @@ entries, in the toolbar popup.
 | `scripting`            | Inject the heartbeat `fetch()` into a matching tab so it runs in that tab's own, container-scoped cookie jar. |
 | `host_permissions: <all_urls>` | Heartbeat URLs are entirely user-defined and unknown ahead of time; this allows requests to and script injection into whatever site you configure, in any container. |
 
-No permission is requested that isn't directly used by a feature described above.
+### Chrome (`manifest.chrome.json`)
 
-## Privacy
+| Permission            | Why it's needed                                                                 |
+|-----------------------|----------------------------------------------------------------------------------|
+| `storage`              | Persist rules, activity logs and scheduler state locally.                       |
+| `alarms`               | Drive the once-a-minute scheduler tick from the service worker, including waking it back up after Chrome terminates it. |
+| `tabs`                 | Enumerate open tabs and read their URLs to determine which rules are active.    |
+| `scripting`            | Inject the heartbeat `fetch()` into a matching tab so it runs with that tab's own cookies. |
+| `host_permissions: <all_urls>` | Heartbeat URLs are entirely user-defined and unknown ahead of time; this allows requests to and script injection into whatever site you configure. |
 
-- No analytics or telemetry of any kind are collected by this extension.
-- All configuration, logs and scheduler state stay in your local browser storage
-  (`browser.storage.local`) and are never transmitted anywhere by the extension itself.
-- Heartbeat requests are sent **only** to URLs you explicitly configure — never to any address
-  chosen by the extension's author or any third party.
+Chrome **omits** `cookies` and `contextualIdentities`: Chrome has no Multi-Account Containers
+equivalent, so there is no container information to read and no permission requested for it.
 
-## Security
+No permission is requested on either browser that isn't directly used by a feature described above.
 
-- Heartbeat requests always use `credentials: "include"`, so they carry the same cookies as the
-  matching tab (including its container's session cookie), exactly like a normal request made by
-  the page itself.
-- Requests are executed inside the actual matching tab via `browser.scripting.executeScript`
-  rather than from the background context, which is what guarantees correct container/cookie-jar
-  isolation — see [Firefox Containers](#firefox-containers) above.
-- Custom headers (e.g. CSRF tokens) you configure are stored locally and only ever sent to the URL
-  you specify for that rule.
-- The extension never parses, inspects, or stores response bodies — only metadata about the
-  outcome (status, duration, success/failure) is logged.
-- `host_permissions` are broad (`<all_urls>`) by necessity, since heartbeat targets are entirely
-  user-defined; review your configured rules periodically if you have security concerns.
+## Privacy & Security
+
+Auto Heartbeat collects no data, has no telemetry, and only ever talks to the URLs you configure.
+See [PRIVACY_POLICY.md](PRIVACY_POLICY.md) for the full privacy policy.
 
 ## Installation
+
+### Firefox
 
 Auto Heartbeat is distributed as a signed, unlisted (self-distributed) Firefox extension
 through Mozilla's addons.mozilla.org (AMO) signing service, rather than as a public AMO
@@ -220,14 +201,16 @@ listing. Signed `.xpi` releases are published from this repository. There are th
 ways the extension ends up installed, and it's worth knowing which one you're using:
 
 - **Temporary installation (development only)**: loading `manifest.json` via
-  `about:debugging` (see [Development](#development) below). Unsigned, removed on every Firefox
-  restart, never updates itself. Only meant for working on the source code.
+  `about:debugging` (see [DEVELOPMENT.md](DEVELOPMENT.md#development) for details). Unsigned,
+  removed on every Firefox restart, never updates itself. Only meant for working on the source
+  code.
 - **Installing the signed `.xpi`**: downloading a release's `.xpi` and using **Install Add-on
   From File...**, as described below. This is the normal way to install Auto Heartbeat as a user.
 - **Automatic updates**: once installed from a signed `.xpi` that was built by this project's
   release workflow, Firefox periodically checks the update manifest referenced by `update_url` in
   `manifest.json` and offers newer signed versions automatically — see
-  [Firefox Automatic Updates](#firefox-automatic-updates) below. Temporary installs never do this.
+  [DEVELOPMENT.md](DEVELOPMENT.md#firefox-automatic-updates) for how this works. Temporary
+  installs never do this.
 
 To install a release build:
 
@@ -240,147 +223,42 @@ To install a release build:
 3. Approve the permission prompt.
 
 See [RELEASE.md](RELEASE.md) for background on Mozilla signing/self-distribution, and
-[Releases](#releases) below for how this repository automates building, signing and publishing.
+[DEVELOPMENT.md](DEVELOPMENT.md#releases) for how this repository automates building, signing and
+publishing.
 
-## Development
+### Chrome
 
-The steps below are for running the extension **from source**, for development and debugging —
-this is not how the extension is meant to be installed normally (see [Installation](#installation)
-above). To load it temporarily in Firefox:
+Every tagged release is automatically built, uploaded and published to the **Chrome Web Store**
+by the release workflow (see [DEVELOPMENT.md](DEVELOPMENT.md#releases) and [RELEASE.md](RELEASE.md)).
+There are two ways to install Auto Heartbeat on Chrome:
 
-1. Open `about:debugging`.
-2. Choose **This Firefox**.
-3. Click **Load Temporary Add-on**.
-4. Select `manifest.json` from this project's root folder.
+- **Chrome Web Store (recommended)**: install/update from the Chrome Web Store listing for this
+  extension like any other Chrome extension — Chrome then keeps it up to date automatically,
+  exactly like Firefox's `update_url` mechanism. Once the store review for the very first
+  submission clears, the listing appears on the Chrome Web Store for the extension id configured
+  in the `CHROME_EXTENSION_ID` GitHub Actions secret (see [RELEASE.md](RELEASE.md#chrome-web-store)).
+- **Unpacked (local/manual install)**: download `auto_heartbeat-<version>-chrome.zip` from the
+  project's [GitHub Releases](https://github.com/antalaron/auto-heartbeat/releases) page (the same
+  zip that's uploaded to the Chrome Web Store) and unzip it somewhere permanent, or build it
+  yourself — see [DEVELOPMENT.md](DEVELOPMENT.md#development) for details. Then:
 
-Temporary add-ons loaded this way are unsigned, are removed when Firefox restarts, and are only
-intended for local testing — they are not a substitute for installing a released version.
+  1. Open `chrome://extensions/` in Chrome.
+  2. Enable **Developer mode** (top-right toggle).
+  3. Click **Load unpacked**.
+  4. Select the directory that directly contains `manifest.json` (e.g. the unzipped folder, or
+     `dist/chrome/` if you built it locally).
+  5. Auto Heartbeat appears in the toolbar; open it or its Settings page like any other extension.
 
-Alternatively, [`web-ext`](https://extensionworkshop.com/documentation/develop/getting-started-with-web-ext/)
-can load and auto-reload the extension for you: `npx web-ext run --source-dir=.`
+  This unpacked install does **not** auto-update; reinstall (steps 1–5) for a new version, or use
+  **Update** in `chrome://extensions/` after replacing the directory's contents. Use this method
+  for local development/testing (no Chrome Web Store account needed), or if you prefer not to
+  install from the store.
 
-### Reloading after changes
+## Development & Contributing
 
-Temporary add-ons are unloaded when Firefox restarts, and code changes are not picked up
-automatically. After editing source files, return to `about:debugging` → **This Firefox** and
-click **Reload** next to Auto Heartbeat.
-
-### Inspecting the extension
-
-- **Background script**: on the `about:debugging` page, click **Inspect** next to Auto Heartbeat
-  to open its dedicated DevTools (console, network, etc.).
-- **Popup**: right-click the toolbar icon while the popup is open and choose **Inspect**, or open
-  the popup and press <kbd>F12</kbd>.
-- **Options page**: open it normally (via the popup's "Open Settings" button or
-  `about:addons`), then press <kbd>F12</kbd> like any regular page.
-- **Storage**: from any of the DevTools consoles above, run
-  `await browser.storage.local.get(null)` to inspect the full stored state (rules, logs, scheduler
-  state).
-
-### Local validation
-
-A minimal [`package.json`](package.json) (no dependencies; scripts only) provides the same checks
-the release workflow runs, without submitting anything to Mozilla or GitHub:
-
-```bash
-npm run validate              # checks manifest.json's version/id are well-formed
-npm run validate -- --tag v1.2.3  # also checks that tag would match manifest.json's version
-npm run lint                  # runs `web-ext lint --self-hosted`
-npm run build                 # runs `web-ext build`, producing ./web-ext-artifacts/*.zip
-```
-
-## Future Improvements
-
-- Import/export configuration as JSON.
-- Aggregate statistics (success rate, average latency) per rule.
-- Optional desktop notifications on repeated heartbeat failures.
-- Configurable retry policy for transient network failures.
-- Configurable scheduler precision (sub-minute) for advanced use cases.
-- Rule grouping/tagging for users with many configured domains.
-- Chromium/Chrome-compatible build (the codebase already avoids Firefox-only APIs wherever
-  possible, aside from `contextualIdentities`, which has no Chromium equivalent).
-
-## Releases
-
-Releases are fully automated by the [`.github/workflows/release.yml`](.github/workflows/release.yml)
-GitHub Actions workflow, triggered by pushing a version tag:
-
-- The expected tag format is **`vX.Y.Z`** (e.g. `v1.2.3`); any other tag shape fails validation
-  before anything is built.
-- `manifest.json`'s `"version"` **must exactly match** the tag (`v1.2.3` requires `"version":
-  "1.2.3"`); the workflow fails fast if they disagree, so it can never publish a release under the
-  wrong version.
-- The extension is built with `web-ext build`, then submitted to Mozilla's AMO signing API via
-  `web-ext sign --channel=unlisted` (self-distributed, not a public AMO listing — see
-  [RELEASE.md](RELEASE.md) for the terminology). The job fails if Mozilla rejects the submission or
-  signing doesn't succeed; an unsigned `.xpi` is never published.
-- The signed `.xpi` returned by Mozilla is verified (valid ZIP, contains `META-INF/mozilla.rsa`,
-  and its bundled `manifest.json` has the expected version/extension id) and, without modifying its
-  bytes, renamed to the final filename:
-
-  ```text
-  auto_heartbeat-X.Y.Z.xpi
-  ```
-- That file is uploaded as the asset of a GitHub Release for the tag (release notes are
-  auto-generated by GitHub).
-- Finally, the [update manifest](#firefox-automatic-updates) is regenerated and pushed so existing
-  installs can discover the new version.
-
-### Mozilla Signing Credentials
-
-The workflow authenticates to Mozilla's AMO signing API using two repository secrets (Settings →
-Secrets and variables → Actions):
-
-| Secret               | Purpose                                                              |
-|----------------------|-----------------------------------------------------------------------|
-| `WEB_EXT_API_KEY`    | AMO API key (JWT issuer) identifying the Mozilla account allowed to sign this add-on. |
-| `WEB_EXT_API_SECRET` | AMO API secret (JWT secret) paired with the key above.               |
-
-Both are generated at
-[addons.mozilla.org/developers/addon/api/key/](https://addons.mozilla.org/developers/addon/api/key/)
-and are only ever read from `secrets.*` inside the workflow — they are never printed, logged, or
-written to any committed file.
-
-### Creating a Release
-
-1. Bump `"version"` in [manifest.json](manifest.json) and commit it to `master`.
-2. Tag and push:
-
-   ```bash
-   git tag v1.2.3
-   git push origin v1.2.3
-   ```
-3. The release workflow runs automatically: it validates the tag/version, lints and builds the
-   extension, submits it to Mozilla for signing, publishes the signed `.xpi` as a GitHub Release
-   asset, and updates the Firefox update manifest. Watch its progress under the repository's
-   **Actions** tab.
-
-### Firefox Automatic Updates
-
-[manifest.json](manifest.json)'s `browser_specific_settings.gecko.update_url` points to a stable,
-authentication-free URL:
-
-```text
-https://raw.githubusercontent.com/antalaron/auto-heartbeat/master/updates.json
-```
-
-Firefox periodically fetches that file — the
-[Firefox update manifest](https://extensionworkshop.com/documentation/manage/updating-your-extension/)
-— which lists every previously published version of Auto Heartbeat for the extension id
-`auto-heartbeat@antalaron.hu`, each with an `update_link` pointing at that version's signed `.xpi`
-GitHub Release asset and an `update_hash` (`sha256:...`) so Firefox can verify the download. If a
-listed version is newer than the one installed, Firefox downloads and installs it automatically.
-
-`updates.json` at the repository root is generated and committed to `master` by the release
-workflow (via [`scripts/generate-update-manifest.mjs`](scripts/generate-update-manifest.mjs)) —
-it is never hand-edited, and every past version's entry is preserved so users on an old version
-always have an upgrade path. The update manifest is only published *after* the corresponding
-GitHub Release asset already exists, so Firefox can never discover an update it can't download.
-
-## Releasing
-
-See [RELEASE.md](RELEASE.md) for background on Mozilla's signing/self-distribution model and
-terminology; see [Releases](#releases) above for how this repository automates it end-to-end.
+Auto Heartbeat is open source. If you want to run it from source, understand its architecture, or
+work on its release pipeline, see [DEVELOPMENT.md](DEVELOPMENT.md) (and [RELEASE.md](RELEASE.md)
+for the Mozilla signing / Chrome Web Store publishing process).
 
 ## License
 

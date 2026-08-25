@@ -1,3 +1,4 @@
+import '../shared/browserPolyfill.js';
 import * as configService from '../services/configService.js';
 import * as logService from '../services/logService.js';
 import * as storageManager from '../storage/storageManager.js';
