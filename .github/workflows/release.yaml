@@ -107,7 +107,7 @@ jobs:
             "${{ needs.validate.outputs.firefox_extension_id }}"
 
       - name: Upload signed XPI as workflow artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: firefox-xpi
           path: web-ext-artifacts/*.xpi
@@ -149,7 +149,7 @@ jobs:
           scripts/publish-chrome-webstore.sh "web-ext-artifacts/auto_heartbeat-${{ needs.validate.outputs.version }}-chrome.zip"
 
       - name: Upload Chrome zip as workflow artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: chrome-zip
           path: web-ext-artifacts/*-chrome.zip
