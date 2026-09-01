@@ -12,6 +12,20 @@ worker build that shares nearly all of its logic with the Firefox build.
 > process, see [RELEASE.md](RELEASE.md). For the privacy policy, see
 > [PRIVACY_POLICY.md](PRIVACY_POLICY.md).
 
+## Quick Installation
+
+### Firefox
+
+1. Download the signed `.xpi` for the version you want from the project's
+   [GitHub Releases](https://github.com/antalaron/auto-heartbeat/releases) — the asset is named `auto_heartbeat-<version>.xpi`.
+2. Click install add-on from file in Firefox and select the downloaded `.xpi`. Approve the permission prompt.
+3. Updates are automatic through Mozilla's signing service, so you don't need to do anything else.
+
+### Chrome
+
+1. Install from the [Chrome Web Store](https://chromewebstore.google.com/detail/auto-heartbeat/cpaaaobbdechgmhnejclcfpplppbclfo).
+2. Updates are automatic through the Chrome Web Store, so you don't need to do anything else.
+
 ## Supported Browsers
 
 | Browser | Manifest | Background | Container/session model |
