@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Auto Heartbeat",
-  "version": "1.0.2",
+  "version": "1.1.0",
   "description": "Keeps selected web sessions alive by sending periodic, configurable heartbeat requests only while a matching browser tab is open. Fully container-aware.",
   "author": "Antal Áron",
   "developer": {
