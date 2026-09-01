@@ -21,6 +21,16 @@
               "strict_min_version": "140.0"
             }
           }
+        },
+        {
+          "version": "1.1.0",
+          "update_link": "https://github.com/antalaron/auto-heartbeat/releases/download/v1.1.0/auto_heartbeat-1.1.0.xpi",
+          "update_hash": "sha256:387191b5233fdad673e8d683f5159587a00663d226bf6858786f5dde43f9cba2",
+          "applications": {
+            "gecko": {
+              "strict_min_version": "140.0"
+            }
+          }
         }
       ]
     }
